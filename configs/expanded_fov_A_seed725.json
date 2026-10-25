@@ -1,0 +1,11 @@
+{
+  "forward_m": 100.0,
+  "left_m": 60.0,
+  "right_m": 60.0,
+  "seed": 725,
+  "batch_size": 16,
+  "device": "auto",
+  "coverage_distance_m": 1.25,
+  "coverage_min_station_gain": 5,
+  "examples": 0
+}

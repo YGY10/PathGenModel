@@ -1,0 +1,36 @@
+{
+  "train_path": "outputs/oracle_lane_v1/audit/train.jsonl",
+  "val_path": "outputs/oracle_lane_v1/audit/val.jsonl",
+  "output_dir": "outputs/training_oracle_v1/full",
+  "epochs": 300,
+  "batch_size": 16,
+  "num_workers": 2,
+  "device": "auto",
+  "seed": 42,
+  "learning_rate": 0.0001,
+  "weight_decay": 0.01,
+  "grad_clip_norm": 1.0,
+  "lr_patience": 8,
+  "lr_factor": 0.5,
+  "min_lr": 1e-06,
+  "early_stop_patience": 50,
+  "max_lines": 32,
+  "max_points": 32,
+  "model": {
+    "d_model": 128,
+    "nhead": 4,
+    "encoder_layers": 2,
+    "decoder_layers": 2,
+    "ff_dim": 256,
+    "dropout": 0.1
+  },
+  "loss": {
+    "position_weight": 1.0,
+    "second_difference_weight": 0.1,
+    "position_beta_m": 1.0,
+    "second_difference_beta_m": 0.1,
+    "exclude_start": true
+  },
+  "tensorboard": true,
+  "augmentation": null
+}

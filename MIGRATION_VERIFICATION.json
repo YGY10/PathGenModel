@@ -1,0 +1,14 @@
+{
+  "snapshot_date": "2026-10-25",
+  "archives": 4,
+  "parts": 53,
+  "archived_files": 916,
+  "compressed_bytes": 430803253,
+  "restored_empty_directory": true,
+  "all_file_checksums_verified": true,
+  "oracle_validation_samples": 630,
+  "oracle_validation_worlds": 30,
+  "original_ade_m": 0.11923261770742044,
+  "restored_cpu_ade_m": 0.11924398773098513,
+  "restored_cpu_fde_m": 0.1415548400927542
+}

@@ -55,7 +55,7 @@ This package **does not modify** V4 geometry generation. It adds `Dataset/audit.
 ```bash
 pip install numpy matplotlib
 python -m Scenario.build_dataset_v4 --worlds 20 --seed 20261023 --perception-config perception_v4.example.json --output-dir outputs/generation
-python -m Dataset.audit --input outputs/generation/samples.jsonl --output-dir outputs/audit --split-seed 42
+python -m Dataset.audit --input outputs/generation/samples.jsonl --output-dir outputs/audit --seed 42
 ```
 
 Results: `train.jsonl`, `val.jsonl`, `test.jsonl`, `split_manifest.json`, `summary.json`, `distribution.csv`, `per_sample.csv`.

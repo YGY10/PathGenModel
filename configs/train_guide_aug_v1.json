@@ -1,0 +1,45 @@
+{
+  "train_path": "outputs/v4_world300_inside13/audit/train.jsonl",
+  "val_path": "outputs/v4_world300_inside13/audit/val.jsonl",
+  "output_dir": "outputs/guide_training_v1/aug",
+  "epochs": 100,
+  "batch_size": 16,
+  "num_workers": 2,
+  "device": "auto",
+  "seed": 42,
+  "learning_rate": 0.0001,
+  "weight_decay": 0.01,
+  "grad_clip_norm": 1.0,
+  "lr_patience": 8,
+  "lr_factor": 0.5,
+  "min_lr": 1e-06,
+  "early_stop_patience": 20,
+  "tensorboard": true,
+  "tensorboard_dir": null,
+  "augmentation": null,
+  "max_lines": 32,
+  "max_points": 32,
+  "model": {
+    "point_dim": 6,
+    "attr_dim": 10,
+    "d_model": 128,
+    "nhead": 4,
+    "encoder_layers": 2,
+    "decoder_layers": 2,
+    "ff_dim": 256,
+    "dropout": 0.1,
+    "num_nav": 3
+  },
+  "loss": {
+    "position_weight": 1.0,
+    "second_difference_weight": 0.1,
+    "position_beta_m": 1.0,
+    "second_difference_beta_m": 0.1,
+    "exclude_start": true
+  },
+  "guide_augmentation": {
+    "cache_dir": "outputs/guide_train_cache_v1",
+    "probability": 0.5,
+    "seed": 271828
+  }
+}

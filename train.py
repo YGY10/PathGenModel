@@ -21,6 +21,7 @@ from torch.utils.data import DataLoader
 from Dataset.dataset import PathJSONLDataset
 from Model.pathgen_model_v1 import ModelConfig, PathGenModel
 from Model.losses import PathLossConfig, PathLoss
+from Dataset.guide_augmentation import (GuideAugmentationConfig, GuideAugmentedDataset, inspect_guide_cache)
 from Dataset.context_augmentation import (
     ContextAugmentationConfig, ContextAugmentedDataset, inspect_context_cache,
 )
@@ -46,6 +47,7 @@ class TrainConfig:
     tensorboard: bool = False
     tensorboard_dir: str | None = None
     augmentation: dict | None = None
+    guide_augmentation: dict | None = None
     max_lines: int = 32
     max_points: int = 32
     model: dict = field(default_factory=lambda: asdict(ModelConfig()))
@@ -70,6 +72,10 @@ class TrainConfig:
         PathLossConfig(**self.loss)
         if self.augmentation is not None:
             ContextAugmentationConfig(**self.augmentation)
+        if self.guide_augmentation is not None:
+            GuideAugmentationConfig(**self.guide_augmentation)
+        if self.augmentation is not None and self.guide_augmentation is not None:
+            raise ValueError('Use one augmentation factor per experiment')
 
 
 def inspect_split(path):
@@ -100,8 +106,11 @@ def seed_worker(_worker_id):
 
 
 def build_loader(path, cfg, shuffle, generator, device):
-    dataset = (ContextAugmentedDataset(path, ContextAugmentationConfig(**cfg.augmentation), cfg.max_lines, cfg.max_points)
-               if shuffle and cfg.augmentation is not None else PathJSONLDataset(path, cfg.max_lines, cfg.max_points))
+    if shuffle and cfg.guide_augmentation is not None:
+        dataset = GuideAugmentedDataset(path, GuideAugmentationConfig(**cfg.guide_augmentation), cfg.max_lines, cfg.max_points)
+    else:
+        dataset = (ContextAugmentedDataset(path, ContextAugmentationConfig(**cfg.augmentation), cfg.max_lines, cfg.max_points)
+                   if shuffle and cfg.augmentation is not None else PathJSONLDataset(path, cfg.max_lines, cfg.max_points))
     return DataLoader(dataset, batch_size=cfg.batch_size, shuffle=shuffle,
                       num_workers=cfg.num_workers, pin_memory=device.type == 'cuda',
                       multiprocessing_context='spawn' if cfg.num_workers else None,
@@ -123,6 +132,7 @@ def run_epoch(model, criterion, loader, device, optimizer=None, grad_clip_norm=1
     sums, nav_sums = {}, {}
     count = 0
     augmentation_profiles, added_tokens, actual_augmented = {}, 0, 0
+    guide_augmented, guide_seen = 0, False
     with torch.set_grad_enabled(training):
         for batch in loader:
             batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
@@ -143,6 +153,9 @@ def run_epoch(model, criterion, loader, device, optimizer=None, grad_clip_norm=1
                     augmentation_profiles[str(profile)] = augmentation_profiles.get(str(profile), 0) + int((batch['_augmentation_profile'] == profile).sum())
                 added_tokens += int(batch['_added_tokens'].sum())
                 actual_augmented += int((batch['_added_tokens'] > 0).sum())
+            if '_guide_augmented' in batch:
+                guide_seen = True
+                guide_augmented += int(batch['_guide_augmented'].sum())
             scalars = {'loss': result['total'], **result['terms'],
                        **{f'weighted/{k}': v for k, v in result['weighted_terms'].items()}}
             for key, value in scalars.items():
@@ -168,6 +181,7 @@ def run_epoch(model, criterion, loader, device, optimizer=None, grad_clip_norm=1
             budget = loader.dataset.cfg.budgets[int(profile)]
             profile_names[profile] = 'original' if budget == 0 else 'full' if budget == -1 else f'k_{budget}'
     return {**{k: v / count for k, v in sums.items()}, 'samples': count,
+            **({'guide_augmentation': {'actual_augmented_fraction_all_samples': guide_augmented / count}} if guide_seen else {}),
             **({'augmentation': {'mean_added_tokens': added_tokens / count,
                                  'actual_augmented_fraction': actual_augmented / count,
                                  'profile_fraction': {profile_names[k]: v / count for k, v in augmentation_profiles.items()}}}
@@ -213,6 +227,8 @@ def train(cfg, resume=None):
     if cfg.augmentation is not None:
         splits['augmentation'] = inspect_context_cache(
             cfg.augmentation['cache_dir'], splits['train'], cfg.max_lines, cfg.max_points)
+    if cfg.guide_augmentation is not None:
+        splits['guide_augmentation'] = inspect_guide_cache(cfg.guide_augmentation['cache_dir'], splits['train'])
     # Fail before starting a run if logging was requested but is unavailable.
     writer_class = None
     if cfg.tensorboard:

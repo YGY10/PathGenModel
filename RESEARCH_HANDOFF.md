@@ -156,3 +156,47 @@ diagnose_pose_progression.py，outputs/context_comparison_inside13/mixed/pose_pr
 
 代码和 Markdown 可用 Git 管理；大数据、checkpoint 和未跟踪的 outputs 需确认实际同步，不能仅复制代码。
 新会话启动后先核实上述文件是否存在，不应根据本记录假定所有文件已经迁移。
+
+## 2026-10-26：自定义冲突测试后的数据覆盖审计
+
+新报告：outputs/guide_boundary_audit/20261026_132823/findings.md。
+脚本：scripts/audit_guide_boundary_conflicts.py。仅分析现有train/val与保存的Mixed预测，没有启动训练。
+训练去quality重复后的转弯窗口：右转374/1440个pose输入Guide明显出物理道路（25.97%，来自63条独立路线）；不是完全缺乏冲突。
+验证全80m三quality：Guide出道路255条，预测仍出道路19条；右转150条中5条仍出道路。clean右转转弯窗口47条冲突，预测明显出道路0条。
+因此原分布上多数能修正；自定义失败不能解释成模型普遍不会规避。冲突/非冲突验证ADE约0.598/0.597m，尚不能把整体误差主要归因于冲突。
+每World/nav仅一条Guide，Mixed只补tokens，没有同道路多Guide或后方元素干预的一致性训练。
+同世界出口后3–30m跨entry/inside8/inside13：entry冲突39组三元组（13 Worlds）平均跨pose横向max-min为0.815m；信息/姿态/噪声同时变化，不能当作单因素因果结果。原Oracle精度诊断目标仍未完成。
+
+## 2026-10-26：已执行固定道路、多Guide专项评测（第一步）
+
+说明：README_GUIDE_CONFLICT_BENCHMARK.md；脚本scripts/evaluate_guide_conflicts.py；完整报告outputs/guide_conflict_benchmark/val30_mixed_v1_20261026/findings.md。
+30验证World/60左右转路线，3pose×3quality=540基础输入，每个13种Guide；排除54条自交Guide案例后有效6966条。道路/GT/感知输入固定，世界Guide变形后跨pose截取；未训练、未重建World，test未用。
+Mixed专项基准原始Guide ADE0.891m、明显出道路3.33%；Guide转弯附近提前/延后3m后ADE1.766/1.975m、出道路20.74%/21.48%。这是偏困难子集与合成干预，不能替换全验证0.597m。
+可见编码路沿冲突子集：提前3m为41/141仍穿越，延后3m为19/62；clean输入也显著退化。支持Guide误差泛化/几何约束不稳，不能单独认定网络或Loss原因。
+仅原始与±3m三Guide，出口平均有符号横向误差跨Guide范围均值1.668m。更极端干预含车道身份歧义，须结合报告解释。
+6项测试通过；原始预测复现最大坐标差7.63e-6m；GT无出道路、非Guide哈希一致、train/val World无交集。配方、预测、逐例指标与可infer重放示例均已保存。尚未执行第二步训练。
+
+## 2026-10-26：下一轮训练入口已准备，尚未启动正式训练
+
+README_GUIDE_TRAINING.md给出完整命令。用户自行运行：先python scripts/build_training_guide_cache.py，再python train.py --config configs/train_guide_aug_v1.json --no-tensorboard。
+新模块Dataset/guide_augmentation.py：左右转50%原Guide、50%从每World/nav八条连续变体采样，直行不变；每epoch仍15120条，不增训练步数。只替换Guide张量，BEV/GT/nav不变；跨pose共享世界Guide。缓存仅使用train240Worlds，输出outputs/guide_train_cache_v1。
+新增TrainConfig.guide_augmentation，缓存指纹进入checkpoint splits，验证不增强；与FOV增强互斥，保持单因素。既有训练配置默认行为保持不变。
+configs/train_guide_aug_v1.json从随机seed42开始，模型/Loss/优化/最大100epoch与原Control一致，输出outputs/guide_training_v1/aug；严格重跑Control配置train_guide_control_v1.json输出独立control目录。旧Mixed不作为无缝续训起点；主要单因素对照是Control，旧Mixed只作参考。
+训练后先evaluate.py导出新模型原验证predictions.npz，再向scripts/evaluate_guide_conflicts.py传新checkpoint和对应--baseline-predictions，复用固定压力测试条件。不能用旧Mixed的baseline档案验证新权重。
+相关测试15通过、1项因缺TensorBoard跳过；双worker与精确续训测试在允许本地IPC的执行环境通过。没有生成正式完整缓存或启动完整训练。
+
+## 2026-10-26：Guide增强第一轮训练已由用户完成并复核
+
+增强outputs/guide_training_v1/aug/best.pt为epoch78，第98轮早停。原验证ADE0.624594m/FDE0.946486m。新增同条件Control评估outputs/guide_training_v1/control_reference_eval_val_20261026（ADE0.607839m），及Control压力评测outputs/guide_conflict_benchmark/control_reference_v1。
+比较报告outputs/guide_training_v1/comparison_20261026/findings.md；两组初始模型SHA相同，train/val指纹及主要超参数相同，FOV增强都为null，仅Guide增强、日志开关和输出目录不同。
+固定6966压力案例：Control/增强 ADE3.0170/1.3283m，明显出道路32.29%/13.71%，可见路沿穿越15.50%/1.92%，可见冲突修复57.85%/96.66%。常规ADE退化约1.68cm（2.76%）；exit_5由0.0838到0.1724m，是主要净退化贡献，inside8/13亦退化。右转整体亦退化，不能仅引用整体approach10改善。
+自定义81.85m Guide、固定停止线/斑马线、同时延长右侧车道线/路沿：路沿终点7/10/13/16/19m，Control后三次穿越，增强五次无穿越。结果在outputs/guide_training_v1/custom_curb_followup_20261026；增强有先左偏再右转绕行，无GT不能认定正确路径。
+待验证下一轮：仅在approach30/20/10及entry启用Guide增强，inside8/13/exit5保留原Guide，其余条件不改，以检验出口精度恢复。该方案尚未实现/训练。Oracle精度诊断仍待执行。
+
+## 2026-10-27：Δs/Δl与纯横向输出诊断完成，未改模型
+
+报告outputs/lateral_output_diagnostic/20261027_v1/findings.md；脚本scripts/diagnose_lateral_output.py。原训练5040/验证630唯一几何pose，核验真实感知全部15120/1890条GT/Guide相同。
+保持现有同序号输出p_i=Guide_i+Δl_i*n_i时，GT理想Δl的全80m ADE下限=train0.6761m、val0.5889m；val左/右/直行0.8647/0.7626/0.1394m。故不能直接删切向自由度达到5cm。原Oracle0.11923m，删去其预测切向分量后ADE0.61269m。
+val mean abs GT所需Δs/Δl=0.5889/1.1945m；纵向占残差平方和31.33%。增强训练池纯横向下限2.0735m，当前训练混合期望1.0581m。
+重要区别：GT理想横向修正曲线与GT的双向最近折线平均距离仅0.02525m，沿程对应是重要因素。投影曲线长度足80m的337/630子集上，按弧长重采样ADE从0.7207降到约0.05756m；另293条长度不足，不能当全验证性能或理论最优。
+建议当前逐点任务保留Δs；l(s)+重采样是值得单独研究的不同方案，需先解决参考曲线覆盖与起点等。5项诊断测试通过，未训练/未改变任何模型、Loss或策略。

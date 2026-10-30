@@ -31,6 +31,7 @@ from Dataset.context_augmentation import (
 class TrainConfig:
     train_path: str = 'outputs/v4_world30_retry/audit/train.jsonl'
     val_path: str = 'outputs/v4_world30_retry/audit/val.jsonl'
+    validation_groups: dict[str, str] = field(default_factory=dict)
     output_dir: str = 'outputs/training_v1'
     epochs: int = 100
     batch_size: int = 16
@@ -76,6 +77,10 @@ class TrainConfig:
             GuideAugmentationConfig(**self.guide_augmentation)
         if self.augmentation is not None and self.guide_augmentation is not None:
             raise ValueError('Use one augmentation factor per experiment')
+        if not isinstance(self.validation_groups,dict) or any(
+                not isinstance(k,str) or not k or '/' in k or not isinstance(v,str) or not v
+                for k,v in self.validation_groups.items()):
+            raise ValueError('validation_groups must map simple group names to JSONL paths')
 
 
 def inspect_split(path):
@@ -205,6 +210,8 @@ def write_tensorboard(writer, record, stale, patience):
                 writer.add_scalar(f'{prefix}/{key}', value, record['epoch'])
     scalars('train', record['train'])
     scalars('val_original', record['val'])
+    for name, values in record.get('validation_groups', {}).items():
+        scalars(f'val_groups/{name}', values)
     for tag, value in [('optimizer/lr', record['lr']), ('time/epoch_seconds', record['seconds']),
                        ('selection/best_val_ade_m', record['best_val_ade_m']),
                        ('early_stop/stale_epochs', stale), ('early_stop/patience', patience)]:
@@ -224,6 +231,11 @@ def train(cfg, resume=None):
     overlap = set(splits['train']['worlds']) & set(splits['val']['worlds'])
     if overlap:
         raise ValueError(f'Train/val world overlap: {sorted(overlap)}')
+    if cfg.validation_groups:
+        splits['validation_groups'] = {name:inspect_split(path) for name,path in cfg.validation_groups.items()}
+        for name, manifest in splits['validation_groups'].items():
+            if not set(manifest['worlds']) <= set(splits['val']['worlds']):
+                raise ValueError(f'Validation group {name} must use only main validation Worlds')
     if cfg.augmentation is not None:
         splits['augmentation'] = inspect_context_cache(
             cfg.augmentation['cache_dir'], splits['train'], cfg.max_lines, cfg.max_points)
@@ -245,6 +257,9 @@ def train(cfg, resume=None):
     val_generator = torch.Generator().manual_seed(cfg.seed + 1)
     train_loader = build_loader(cfg.train_path, cfg, True, generator, device)
     val_loader = build_loader(cfg.val_path, cfg, False, val_generator, device)
+    group_generators = {name:torch.Generator() for name in sorted(cfg.validation_groups)}
+    group_loaders = {name:build_loader(cfg.validation_groups[name], cfg, False, generator_, device)
+                     for name,generator_ in group_generators.items()}
     model = PathGenModel(ModelConfig(**cfg.model)).to(device)
     initial_digest = hashlib.sha256()
     for name, value in model.state_dict().items():
@@ -296,6 +311,10 @@ def train(cfg, resume=None):
                 train_loader.dataset.set_epoch(epoch)
             train_metrics = run_epoch(model, criterion, train_loader, device, optimizer, cfg.grad_clip_norm)
             val_metrics = run_epoch(model, criterion, val_loader, device)
+            group_metrics = {}
+            for i, (name, loader) in enumerate(group_loaders.items()):
+                group_generators[name].manual_seed(cfg.seed + 100000 + epoch*len(group_loaders) + i)
+                group_metrics[name] = run_epoch(model, criterion, loader, device)
             score = val_metrics['ade_m']
             improved = score < best
             best, stale = (score, 0) if improved else (best, stale + 1)
@@ -303,6 +322,8 @@ def train(cfg, resume=None):
             scheduler.step(score)
             record = {'epoch': epoch, 'lr': lr_used, 'seconds': time.monotonic() - begin,
                       'train': train_metrics, 'val': val_metrics, 'best_val_ade_m': best}
+            if group_metrics:
+                record['validation_groups'] = group_metrics
             payload = {'epoch': epoch, 'config': asdict(cfg), 'splits': splits,
                        'model': model.state_dict(), 'optimizer': optimizer.state_dict(),
                        'scheduler': scheduler.state_dict(), 'best_val_ade_m': best,
@@ -321,6 +342,8 @@ def train(cfg, resume=None):
                   f'val_ADE={score:.4f}m val_FDE={val_metrics["fde_m"]:.4f}m '
                   f'guide_ADE={val_metrics["guide_ade_m"]:.4f}m lr={lr_used:.2g} '
                   f'time={record["seconds"]:.1f}s' + (' [best]' if improved else ''), flush=True)
+            if group_metrics:
+                print('  ' + ' '.join(f'val_{name}_ADE={m["ade_m"]:.4f}m' for name,m in group_metrics.items()), flush=True)
             if cfg.early_stop_patience and stale >= cfg.early_stop_patience:
                 print(f'Early stopping: no new best validation ADE for {stale} epochs.', flush=True)
                 break

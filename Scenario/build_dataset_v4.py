@@ -47,6 +47,32 @@ def read_qualities(path=None):
         out[name]=q
     return out
 
+PERCEPTION_CONVENTION = 'vcs_visible_segment_breaks_v2'
+
+
+def visible_line_sections(points, visible_mask, break_rate, rng):
+    """Crop first; draw at most one interior gap per eligible visible run.
+
+    Gap width is 4--13% of the visible run's arc length (minimum 0.8m).
+    Leave 2m on either side so a gap does not merely shorten a detection.
+    """
+    points = np.asarray(points)
+    edges = np.flatnonzero(np.diff(np.r_[False, visible_mask, False]))
+    sections = []
+    for start, end in edges.reshape(-1, 2):
+        part = points[start:end]
+        if len(part) < 3 or np.linalg.norm(part[-1]-part[0]) <= 1.3:
+            continue
+        arc = arclength(part)
+        pieces = [part]
+        if arc[-1] > 5. and rng.random() < break_rate:
+            width = min(max(.8, rng.uniform(.04, .13)*arc[-1]), arc[-1]-4.)
+            gap_start = rng.uniform(2., arc[-1]-width-2.)
+            pieces = [part[arc <= gap_start], part[arc >= gap_start+width]]
+        sections.extend(p for p in pieces if len(p) >= 3 and np.linalg.norm(p[-1]-p[0]) > 1.3)
+    return sections
+
+
 def observe(world,ego,t,q,rng,max_lines=32):
     # Avoid altering the V3 global quality presets; each call gets its own quality.
     local={'forward_m':q.forward_m,'rear_m':q.rear_m,'lateral_m':max(q.left_m,q.right_m),
@@ -58,24 +84,14 @@ def observe(world,ego,t,q,rng,max_lines=32):
         kind=obj['type'];p=to_ego(np.asarray(obj['points']),ego,t)
         if kind in ('line','curb'):
             if rng.random()<(q.line_miss_rate if kind=='line' else q.curb_miss_rate):continue
-            # Densely sample curves; break once or twice at continuous ranges, never vertex Bernoulli dropout.
+            # Dense VCS sampling, then crop and break each visible continuous run.
             pp=[]
             for a,b in zip(p[:-1],p[1:]):
                 n=max(1,int(np.ceil(np.linalg.norm(b-a)/.4)))
                 pp.extend(a[None,:]+(np.arange(n)/n)[:,None]*(b-a))
             if len(p):pp.append(p[-1])
             pp=np.asarray(pp,float)
-            mask=visible(pp)
-            if len(pp)>15 and rng.random()<q.break_rate:
-                k=int(rng.integers(5,len(pp)-5)); width=max(3,int(rng.uniform(.04,.13)*len(pp)))
-                mask[k:min(len(pp),k+width)]=False
-            sections=[]; start=None
-            for i,ok in enumerate(mask):
-                if ok and start is None:start=i
-                if start is not None and (not ok or i==len(mask)-1):
-                    end=i if not ok else i+1
-                    if end-start>=3 and np.linalg.norm(pp[end-1]-pp[start])>1.3:sections.append(pp[start:end])
-                    start=None
+            sections=visible_line_sections(pp,visible(pp),q.break_rate,rng)
             for part in sections:
                 shift=rng.normal(0,q.offset_sigma_m,2)
                 noisy=part+shift+rng.normal(0,q.sigma_m*.35,part.shape)
@@ -239,7 +255,8 @@ def build_one(world_seed, cfg, qualities, guide_max_offset=3., guide_handle_rang
                      'gt_path':np.round(gt,4).tolist(),'reference_line':np.round(ref,4).tolist(),
                      'lane_markings':ln,'road_boundaries':cb,'crosswalks':cw,'stop_lines':st,
                      'evaluation':{'support_heuristic':observation_support(gt,ln,cb,cfg)},
-                     'metadata':{'generator_version':'intersection_v4','quality':quality,'pose_name':pose,
+                     'metadata':{'generator_version':'intersection_v4','perception_convention':PERCEPTION_CONVENTION,
+                                 'quality':quality,'pose_name':pose,
                                  'num_in':list(spec.num_in),'num_out':list(spec.num_out),
                                  'ego_world_xy':np.round(ego,6).tolist(),
                                  'heading_rad':float(np.arctan2(t[1],t[0])),'ego_route_s_m':float(s0),

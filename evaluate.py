@@ -77,6 +77,7 @@ def sample_records(dataset, arrays):
         entry = {'index': i, 'id': row['id'], 'world_id': row['world_id'],
                  'navigation': row['navigation'], 'quality': md.get('quality', 'unknown'),
                  'pose': md.get('pose_name', 'unknown'),
+                 'scene_type': md.get('scene_type', 'unknown'),
                  **{k: float(v[i]) for k, v in metrics.items()}}
         entry['ade_gain_m'] = entry['guide_ade_m'] - entry['ade_m']
         if 'empty_bev' in arrays:
@@ -101,7 +102,7 @@ def summarize(records):
     return summary
 
 
-def grouped_summaries(records, keys=('navigation', 'quality', 'pose', 'world_id')):
+def grouped_summaries(records, keys=('scene_type', 'navigation', 'quality', 'pose', 'world_id')):
     return {key: {value: summarize([r for r in records if r[key] == value])
                   for value in sorted({r[key] for r in records})} for key in keys}
 

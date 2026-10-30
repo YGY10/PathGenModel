@@ -1,5 +1,73 @@
 # PathGenModel 研究交接
 
+## 2026-10-30：联合模型 best 评估与分流过渡段诊断
+
+用户已运行 `outputs/training_road_mixed_v1/eval_best_val`。总ADE0.360673m、EmptyBEV0.650670m。
+路口正常/EmptyBEV ADE=0.593469/1.13216m；分流=0.107372/0.12677m。
+路口entry ADE0.99896m、approach10 0.87494m；分流before10/during/after全程ADE=0.11018/0.13995/0.07199m。
+新增 transition_region_summary.json 和 transition_region_per_sample.csv：按GT世界x落在[0,length_m]筛选过渡段，排除起点，
+对有可评价点的样本等权。before10过渡段正常/EmptyBEV/Guide ADE=0.204670/0.262075/0.478282m；
+during_mid=0.130967/0.122518/0.521814m，每组579样本。after5未来不含过渡段。
+分流Guide自身可支持大部分修正，清空BEV仍有较高精度；不能将0.107m解释为已充分学习车道几何。
+各场景最差样本另存 diagnostic_worst_intersection.png、diagnostic_worst_lane_transition.png。
+
+## 2026-10-30：联合训练首轮已完成
+
+已核实 `outputs/training_road_mixed_v1/history.jsonl`：epoch69早停，best为epoch44。
+best混合验证3627样本（路口1890、分流1737），ADE/FDE=0.360673/0.511606m。
+路口ADE/FDE=0.593469/0.889683m，Guide ADE=1.460471m；
+分流ADE/FDE=0.107372/0.100228m，Guide ADE=0.496791m。
+路口straight/left/right ADE=0.462179/0.702033/0.616197m，41–80m ADE=0.846790m。
+最后epoch69路口ADE0.613956m、分流0.100197m，整体未刷新best，不建议直接延长。
+本次尚未运行 evaluate.py，目录下未发现评估summary。下一步应评估best，并检查分流before/during/after及过渡段局部误差。
+混合平均不能代表路口也达到0.36m；不能与旧输入上的旧成绩直接比较混合收益。
+
+## 2026-10-30：准备批量分流 + 路口联合训练
+
+新增 `Scenario.prepare_mixed_dataset`（重复 --source name=目录），保留来源 train/val/test World 归属，
+拒绝重复 ID / World 冲突；可用 --refresh-perception intersection 从原物理 World 重导出路口感知，
+统一 VCS 可见段内断裂，但保留 GT/Guide/pose/划分。旧支持诊断会清空。
+新增 `configs/train_road_mixed_v1.json`，准备600分流 World（预计17280样本）+300已有路口（18900样本），
+新数据输出 `outputs/road_mixed_v1`，新训练 `outputs/training_road_mixed_v1`。
+架构与 Loss 沿用 V1，标准 FOV，无额外 FOV augmentation，从头训练；最多150轮、25轮无best早停、TensorBoard。
+train.py 新增可选 validation_groups，每轮单独记录两类验证 ADE；选择仍按混合 val ADE。
+evaluate.py 新增 scene_type 分组。生成器新增 --preview-worlds（默认5），避免批量画图。
+完整执行命令见 `README_MIXED_ROADS.md`。完整600 World生成和正式训练尚未启动，由用户自行运行。
+小样本流水线已实际跑通：3个分流World+6条真实路口样本，96条均可编码；37项相关测试通过。
+批量生成允许全部漏检的空BEV样本，避免低质量场景在大批量时因非空断言中断。
+
+## 2026-10-30：路沿+边线、可见段内感知断裂
+
+用户澄清最外侧同时有路沿与车道线。生成器保留两侧 curb，并在各自内侧横向 0.25m
+增加白色实线 lane_marking，过渡区仍无内部车道分隔线。
+共享 `Scenario.build_dataset_v4.observe` 现先按 VCS 裁剪连续段，再在段内按原 break_rate
+采样缺口；标记 `perception_convention=vcs_visible_segment_breaks_v2`。这也影响后续路口数据生成，
+旧数据未重写。新批次 `outputs/lane_transition_preview_v4_visible_breaks`：5 World、162 样本，
+GT/Guide 与 v3 逐条一致，感知 RNG 调用变化，不作为同噪声严格配对。
+相关回归测试 35 项通过（含可见段断裂、VCS 旋转、固定 Guide、扩展感知及多进程训练流程）。
+
+## 2026-10-30：分流 Guide 改为分段一次
+
+用户要求降低分流 Guide 的平滑程度。`build_lane_transition.py` 新增
+`--guide-shape piecewise_linear|smooth`，默认分段一次：入口/过渡直连/出口三段、四个世界锚点。
+保留偏移和过渡位置扰动，在世界坐标固定后截取，GT/道路/感知不随该模式改变。
+新预览 `outputs/lane_transition_preview_v3_linear`，5 World、162 样本；旧 v2 保留。
+生成时显式读取 `perception_v4.example.json`。尚未训练。
+
+## 2026-10-29 新增：增道/减道预览数据
+
+用户确认场景为沿行驶方向从 x 条车道变成 x±n 条，而不限定为两条道路分叉。
+新增 `Scenario/build_lane_transition.py`，说明 `README_LANE_TRANSITION.md`。
+用户指出初版形态不符，已修订并生成 `outputs/lane_transition_preview_v2`：5 World、162 样本。
+车道数前后均 1–4，变化 1–2；过渡长度 15–25m；过渡区内部无标线，只有道路边界。
+每条连接 3 pose（before_10、during_mid、after_5）× clean/medium/hard，复用 V4 感知参数与函数。
+格式兼容现有模型编码，固定 World Guide，nav=straight；World 隔离 3/1/1，未启动训练。
+预览在 `previews/`，3×3 行质量列 pose，使用路口相同坐标与真值/感知配色，额外画 FOV。
+当前为单侧增减道、平滑连接、GT 仅验证道路包络；
+不代表已完成所有车道连接规则。先与用户确认形态，再扩充和制定路口+增减道混合训练。
+`tests/test_lane_transition.py` 21 项测试通过，检查所有合法数量组合、无标线区域、输入编码、采样、固定 Guide 和确定性。
+旧 `outputs/lane_transition_preview_v1` 保留，但不作为当前方案使用。
+
 更新：2026-10-25。这是研究状态记录；文件内路径均相对项目根目录，换电脑后以实际文件为准。
 
 ## 当前目标和下一步

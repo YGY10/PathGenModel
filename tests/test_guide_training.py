@@ -88,3 +88,41 @@ def test_guide_training_resume_is_identical(prepared,tmp_path):
         assert 'guide_augmentation' in history[0]['train']
         assert 'guide_augmentation' not in history[0]['val']
     finally:torch.set_num_threads(threads)
+
+
+def test_mixed_cache_augments_intersection_turns_only(prepared,tmp_path):
+    _,source,_=prepared
+    from Scenario.build_lane_transition import make_urban_world,build_samples,URBAN_PRESETS
+    mixed=tmp_path/'mixed';(mixed/'audit').mkdir(parents=True)
+    intersection=[json.loads(line) for line in (source/'audit/train.jsonl').open()]
+    for row in intersection:row['metadata']['scene_type']='intersection'
+    cfg,world,routes=make_urban_world(44000000,URBAN_PRESETS[0])
+    transitions=build_samples(cfg,world,routes,{'clean':DEFAULT_QUALITIES['clean']})
+    # Include all nav values, including left/right that must stay unaugmented.
+    assert {'left','right','straight'}<=set(r['navigation'] for r in transitions)
+    rows=intersection+transitions
+    path=mixed/'audit/train.jsonl'
+    path.write_text(''.join(json.dumps(r)+'\n' for r in rows))
+    (mixed/'audit/val.jsonl').write_text((source/'audit/val.jsonl').read_text())
+    cache=tmp_path/'mixed_cache';manifest=build(source,cache,mixed_source=mixed)
+    assert manifest['version']==2
+    assert manifest['source']==inspect_split(path)
+    assert set(manifest['eligible_worlds'])==set(r['world_id'] for r in intersection)
+    assert not set(manifest['eligible_worlds'])&set(r['world_id'] for r in transitions)
+    assert inspect_guide_cache(cache,inspect_split(path))['manifest_sha256']
+    augmented=GuideAugmentedDataset(path,GuideAugmentationConfig(str(cache),probability=1.))
+    original=PathJSONLDataset(path)
+    for i,row in enumerate(rows):
+        a,b=augmented[i],original[i]
+        eligible=row['metadata']['scene_type']=='intersection' and row['navigation'] in ('left','right')
+        assert bool(a['_guide_augmented'])==eligible
+        for key in b:
+            if key!='guide' or not eligible:torch.testing.assert_close(a[key],b[key],rtol=0,atol=0)
+    # Full mixed split fingerprint remains mandatory, even for unchanged rows.
+    with pytest.raises(ValueError,match='match training split'):
+        inspect_guide_cache(cache,{**inspect_split(path),'sha256':'changed'})
+    # Removing a required turn key cannot silently disable augmentation.
+    keys=json.loads((cache/'keys.json').read_text());keys.pop()
+    (cache/'keys.json').write_text(json.dumps(keys))
+    with pytest.raises(ValueError,match='Missing Guide variants'):
+        GuideAugmentedDataset(path,GuideAugmentationConfig(str(cache)))

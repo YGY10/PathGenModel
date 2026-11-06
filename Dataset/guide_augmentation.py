@@ -24,7 +24,7 @@ class GuideAugmentationConfig:
 def inspect_guide_cache(directory, source):
     directory=Path(directory)
     manifest=json.loads((directory/'manifest.json').read_text())
-    if manifest.get('version')!=1 or manifest['source']!=source:
+    if manifest.get('version') not in (1,2) or manifest['source']!=source:
         raise ValueError('Guide cache does not match training split')
     for file in ('guides.npy','keys.json'):
         if file_sha256(directory/file)!=manifest['files'][file]:
@@ -34,7 +34,10 @@ def inspect_guide_cache(directory, source):
     if guides.shape!=(len(keys),manifest['variants_per_route'],81,2) or guides.dtype!=np.float32:
         raise ValueError('Invalid Guide cache shape/dtype')
     tuples=[tuple(k) for k in keys]
-    if len(set(tuples))!=len(tuples) or set(k[0] for k in tuples)!=set(source['worlds']):
+    eligible_worlds=set(manifest['eligible_worlds']) if manifest['version']==2 else set(source['worlds'])
+    if manifest['version']==2 and (manifest.get('eligible_scene_types')!=['intersection'] or not eligible_worlds or not eligible_worlds<=set(source['worlds'])):
+        raise ValueError('Invalid mixed Guide cache scope')
+    if len(set(tuples))!=len(tuples) or set(k[0] for k in tuples)!=eligible_worlds:
         raise ValueError('Invalid Guide key/world membership')
     return {'manifest_sha256':file_sha256(directory/'manifest.json'),'files':manifest['files']}
 
@@ -45,6 +48,7 @@ class GuideAugmentedDataset(PathJSONLDataset):
     Cache holds common world-Guide variants cropped at each pose. Straight
     samples remain unchanged. Eligible left/right samples keep original Guide
     with probability 1-p and choose one cached variant with probability p.
+    Version-2 mixed caches target intersection scenes; transition rows remain unchanged.
     """
     def __init__(self,path,cfg,max_lines=32,max_points=32):
         super().__init__(path,max_lines,max_points)
@@ -54,13 +58,20 @@ class GuideAugmentedDataset(PathJSONLDataset):
         manifest=json.loads((self.directory/'manifest.json').read_text())
         self.variant_count=manifest['variants_per_route']
         self.row_keys=[]
+        eligible_worlds=set()
         with self.path.open() as stream:
             for line in stream:
                 row=json.loads(line)
+                if manifest.get('version')==2 and row['metadata'].get('scene_type') not in manifest['eligible_scene_types']:
+                    self.row_keys.append(None)
+                    continue
+                eligible_worlds.add(row['world_id'])
                 key=(row['world_id'],row['navigation'],row['metadata']['pose_name'])
                 if row['navigation'] in ('left','right') and key not in self.key_index:
                     raise ValueError(f'Missing Guide variants for {key}')
                 self.row_keys.append(key)
+        if manifest.get('version')==2 and eligible_worlds!=set(manifest['eligible_worlds']):
+            raise ValueError('Mixed Guide cache does not cover eligible intersection Worlds')
 
     def set_epoch(self,epoch):self.epoch=int(epoch)
 

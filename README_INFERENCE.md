@@ -1,5 +1,7 @@
 # 自定义输入推理
 
+支持通过[BEV 场景编辑器](README_SCENE_EDITOR.md)绘制道路、编辑语义属性和导航，再导出JSON。启动：`python scene_editor.py --open`。
+
 在项目根目录、激活 toybev 环境后运行：
 
 ```bash

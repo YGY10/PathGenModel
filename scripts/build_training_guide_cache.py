@@ -25,15 +25,17 @@ def sample_parameters(slot,rng):
     return signs[0]*float(rng.uniform(1,6)),signs[1]*float(rng.uniform(.5,3))
 
 
-def build(source,output,seed=88421):
+def build(source,output,seed=88421,mixed_source=None):
     source,output=Path(source),Path(output)
     if output.exists():raise ValueError('Use a new cache directory')
-    train_info=inspect_split(source/'audit/train.jsonl');val_info=inspect_split(source/'audit/val.jsonl')
+    data_source=Path(mixed_source) if mixed_source is not None else source
+    train_info=inspect_split(data_source/'audit/train.jsonl');val_info=inspect_split(data_source/'audit/val.jsonl')
     if set(train_info['worlds'])&set(val_info['worlds']):raise ValueError('Train/val World overlap')
     poses={}
-    with (source/'audit/train.jsonl').open() as stream:
+    with (data_source/'audit/train.jsonl').open() as stream:
         for line in stream:
             row=json.loads(line)
+            if mixed_source is not None and row['metadata'].get('scene_type')!='intersection':continue
             if row['navigation'] not in ('left','right'):continue
             md=row['metadata'];key=(row['world_id'],row['navigation'],md['pose_name'])
             descriptor={'ego_world_xy':md['ego_world_xy'],'heading_rad':md['heading_rad']}
@@ -74,12 +76,15 @@ def build(source,output,seed=88421):
     arrays.flush();del arrays
     (output/'keys.json').write_text(json.dumps(keys)+'\n')
     (output/'parameters.json').write_text(json.dumps(parameters,indent=2)+'\n')
-    manifest={'version':1,'source':train_info,'validation_worlds_excluded':val_info['worlds'],
+    manifest={'version':2 if mixed_source is not None else 1,'source':train_info,'validation_worlds_excluded':val_info['worlds'],
         'seed':seed,'variants_per_route':8,'keys':len(keys),'routes':len(grouped),
         'guide_route_reconstruction_max_m':closure,'rejected_self_intersection_draws':rejected,
         'files':{name:file_sha256(output/name) for name in ('guides.npy','keys.json')},
         'policy':'2 timing-only,2 lateral-only,4 joint signed continuous variants per World/nav. Fixed GT/BEV/nav. Straight inputs unchanged.',
         'parameters_sha256':file_sha256(output/'parameters.json')}
+    if mixed_source is not None:
+        manifest.update(eligible_scene_types=['intersection'],eligible_worlds=sorted({k[0] for k in keys}),
+                        geometry_source=str(source.resolve()))
     (output/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
     print(json.dumps({k:v for k,v in manifest.items() if k not in ('source','validation_worlds_excluded','files')},indent=2))
     return manifest
@@ -90,4 +95,5 @@ if __name__=='__main__':
     ap.add_argument('--source',type=Path,default=Path('outputs/v4_world300_inside13'))
     ap.add_argument('--output-dir',type=Path,default=Path('outputs/guide_train_cache_v1'))
     ap.add_argument('--seed',type=int,default=88421)
-    a=ap.parse_args();build(a.source,a.output_dir,a.seed)
+    ap.add_argument('--mixed-source',type=Path,help='Bind to this mixed dataset; augment intersection turns only, using --source physical Worlds/routes')
+    a=ap.parse_args();build(a.source,a.output_dir,a.seed,a.mixed_source)

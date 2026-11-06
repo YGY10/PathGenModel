@@ -1,8 +1,77 @@
+# 当前预览：城区增减道 + 导航选道（2026-11-04）
+
+## 批量数据与感知输入
+
+600 World正式批次已完成：`outputs/urban_lane_transition_world600_v1`，`validation_report.json` 的 passed=true。
+合计45,360行：训练480 World/36,342行，验证60/4,401，测试60/4,617。左/直/右导航各15,120行，三档感知质量各15,120行；28条hard空BEV样本按漏检设定保留。
+使用独立seed 44000000，均采用35–50m过渡、内部无标线、原有三档感知参数。
+World是物理真值；生成时已按路线/导航、自车pose和clean/medium/hard叠加可见范围裁剪、漏检、片段断裂及位置噪声。
+模型训练读取 `audit/train.jsonl` / `val.jsonl` 中感知后的 `lane_markings`、`road_boundaries`，以及Guide、navigation，GT仅监督；不能直接用world物理线作为模型输入。
+World隔离480/60/60；当前批次循环覆盖已确认的5个城区增减道模板，尚非全部可能的车道数量和连接形态。
+数据生成器改为逐World写盘，5-World的样本及三个划分与改造前逐字节一致。并行批次分4片生成，最后统一按全局World种子划分，分片自己的临时划分不用于训练。
+旧串行未完成目录 `outputs/urban_lane_transition_world600_v1_partial_serial` 不能用于训练。
+
+## 2026-11-04 当前规则
+
+用户确认：道路过渡长度在 **35–50m** 内均匀随机；内部无标线区起止位置按过渡长度比例随机，每条线端点稍有差异。
+默认标线模式改为 `unmarked`，所有World都有共同的内部空白区，两侧路沿、外侧实线保留。
+空白区名义起点为长度的10–20%，名义终点为76–88%；各分隔线端点另加±3.5%长度的扰动。
+新预览：`outputs/urban_lane_transition_preview_v4_length35_50`，5 World、378行，未训练。旧输出保留。
+
+```bash
+python -m Scenario.build_lane_transition --worlds 5 --seed 43000000 \
+  --scene-mode urban --marking-pattern unmarked \
+  --perception-config perception_v4.example.json \
+  --output-dir outputs/urban_lane_transition_preview_length35_50_new
+```
+
+## 2026-11-03 历史更新：内部无标线区
+
+新版预览：`outputs/urban_lane_transition_preview_v3_marking_gaps`，仍为5 World、378行。
+上一版 `--marking-pattern mixed` 为默认：前5个World依次为 unmarked / partial / continuous / unmarked / partial。
+可指定 `--marking-pattern unmarked` 让所有World都有完整的内部无标线区。
+
+- unmarked：各内部标线在过渡区前部终止、后部恢复，各线端点略有差异，保证一段共同的内部完全空白区。
+- partial：保留一条持续分隔线，其余内部线局部缺失。
+- continuous：保留上一版的连续标线，作为对照。
+- 两侧路沿和道路外侧实线均保留。空白是物理道路中没有标线，与随机感知漏检/断裂分别建模。
+- 缺口两侧独立保存为折线，禁止编码时连接穿过空白；同seed改变标线模式不改变GT、Guide、导航目标和道路边界，但感知随机调用变化，不构成同噪声严格配对。
+
+预览浅黄色带标记保证内部完全无标线的公共区域（仅unmarked模式）。`world.json`和样本metadata中记录各线缺口、公共区间及标线模式。
+
+```bash
+python -m Scenario.build_lane_transition --worlds 5 --seed 43000000 \
+  --scene-mode urban --marking-pattern mixed \
+  --perception-config perception_v4.example.json \
+  --output-dir outputs/urban_lane_transition_preview_marking_gaps_new
+```
+
+CLI 现在默认 `--scene-mode urban`，新增 `make_urban_world`；原 `make_world` 和 `--scene-mode legacy` 保留旧数据生成行为。
+
+```bash
+python -m Scenario.build_lane_transition \
+  --worlds 5 --seed 43000000 --scene-mode urban \
+  --perception-config perception_v4.example.json \
+  --output-dir outputs/urban_lane_transition_preview_new
+```
+
+已生成 `outputs/urban_lane_transition_preview_v2`：5 World、378 行（多入口 × 三导航 × 三 pose × 三质量），用于形态确认，尚未训练。
+`previews/` 每张图三行是 left/straight/right，三列为 before_10/during_mid/after_5，均展示同一入口的 clean 输入；全部质量在 JSONL 中。
+`overview.png` 对比每个 World 同一入口、同一自车位置的三导航 GT/Guide。
+
+规则：导航表示后续路口意图，当前路段进行提前选道，并非立即转弯。目标限制为原槽位或相邻槽位内的合法出口，最多调整一个车道；left/right 选择可达范围物理最左/最右目标，straight 选择横向变化最小目标。槽位索引从固定侧边缘向变化侧计数，不能直接把小索引当作左侧。某些导航可得到同一个近期目标。没有一车道内可达出口的入口会被省略，不伪造跨多车道路径。
+
+过渡长度 35–80m，保留持续车道的虚线；新增分隔线在扩宽提供空间后出现，消失分隔线在收窄时终止。GT 允许有意跨越虚线调整到相邻车道，检查道路包络与最大几何斜率；这不是车速相关的动力学可行性验证。Guide 依目标端点独立生成，保持世界固定，具有 ±7m 起止位置扰动、0.3–0.9m 横向误差，出口不改变最近车道身份。尚未实现同路多 Guide 增强。
+
+下文保留旧版形态说明，显式加 `--scene-mode legacy` 才对应这些旧约定。
+
+---
+
 # 增道 / 减道小批量预览
 
 ```bash
 python -m Scenario.build_lane_transition \
-  --worlds 5 --seed 41000000 \
+  --worlds 5 --seed 41000000 --scene-mode legacy \
   --guide-shape piecewise_linear \
   --perception-config perception_v4.example.json \
   --output-dir outputs/lane_transition_preview_v4_visible_breaks

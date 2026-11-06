@@ -1,5 +1,210 @@
 # PathGenModel 研究交接
 
+## 2026-11-06：编辑器保存PNG/存档总览、刚体旋转、指定参照线
+
+用户准备手绘5–10原型，要求保存图片、旋转线/box、测距不被近路沿干扰。已完成scene_editor.py及tools/scene_editor改动：
+- 每次保存新增scene.png，完整编辑几何自动取景、名称/nav/ID/米制坐标/ego，粗Guide标前80m；返回preview_path/url，界面可点图。PNG在创建输出目录前渲染，短Guide仍先拒绝。Matplotlib Figure/Agg+锁避免HTTP线程绘图竞争。
+- outputs/scene_editor/gallery.html自动更新离线缩略图总览，链接大图/scene/input，仅浏览不删除。--backfill-previews只补缺失PNG、不改原JSON或覆盖旧图，已为原16个存档补图，无错误。浏览器测试另产生标名browser_validation的新存档。
+- 新geometry.js：旋转线/Bezier所有控制点和区域顶点，支持数字角度及±5°，中心/首点/末点/ego支点。正角左旋，Guide默认首点。中心为按几何线长加权的中心（框含闭合边），刚体变换下保持稳定，避免连续旋转漂移。撤销/重做有效。
+- 新参照线下拉框：自动最近或指定ID；按现有类型筛选候选，高亮指定参照，拖动/旋转时保持锁定；删除/滤掉参照则回退自动。
+- GET /api/health editor_version=3；旧后台提示重启。GET /api/scene-image/<时间戳>.png严格路径白名单。
+服务原PID796360已确认后停止，现同地址127.0.0.1:8765后台PID2741837，日志outputs/scene_editor/server_20261106_154533_619634/server.log；旧浏览器草稿保留，用户先下载草稿备份再刷新加载新UI。
+13项tests/test_scene_editor.py通过（新增PNG非空/格式/画廊及补图不覆写），Node geometry/measurement测试通过（旋转方向/支点/逆变换/形状/Bezier/指定远参照），Chrome真实浏览器操作全部通过，含曲线/框旋转与撤销、近路沿.2m时锁定另一线、PNG HTTP读取、保存/导入/离线重连。
+最终截图outputs/scene_editor/browser_validation_IW6rUy/editor_features.png；说明README_SCENE_EDITOR.md已更新。未改用户examples/custom_input_split.json、训练或模型。
+
+## 2026-11-06：用户重训混合增强模型已完整验证
+
+权重已恢复到outputs/training_road_mixed_guide_aug_v1/best.pt，best90/last115，训练best.2387576，25轮早停。SHA256 ab1965af887610c8bba23afa631813682d83f14476db1f8d139b5eee0190e23e。用户明确授权执行验证，本次CPU threads1/num_workers0，未训练/改模型或数据。
+常规评估新目录eval_val_20261106，6291/90World，输入指纹一致、train/val World无交集：ADE.23874949、FDE.33921924、EmptyBEV.55200291；路口1890 ADE.61610390、Empty1.46389094；分流4401 ADE.07669545、Empty.16039456。与旧增强结果基本持平。
+汇总outputs/model_review/20261106_mixed_guide_aug_v1/findings.md和summary.json。standardized重跑新混合+旧单路口：mixed/单路口ADE：straight .5925/.6332、left .2999/1.3265、split .5103/.5934；mixed出口横向绝对均值 .7511/.1982/.7044m。均无完整道路/目标走廊越界或路沿相交（仅中心线）。标准左转清空BEV ADE .2999→4.4591，证实该例依赖道路；直行分流居中仍不足。三例人工标签非真实GT，几何/FOV/语义同步标准化非因果隔离。
+custom_left重跑原183404、183817，最新mixed仍首例偏相邻出口、第二例穿curb1(x16.634,y17.470)，与误删前保存预测平均差.106/.132m，旧问题大体重现；无GT不称ADE。新overlay各在standardized/comparison.png、custom_left/comparison.png。
+结果不足以支持“混合模型全面差于单路口”或“完全忽略BEV”，也未解决自定义泛化。继续保留当前baseline，感知概率性平顺形变的代码尚未改动，后续先小预览再训练。
+
+## 2026-11-06：用户审核感知预览，要求平顺的结构性拟合偏差
+
+原话评价已存outputs/perception_review/20261105_v1/user_feedback_20261106.json。A路口：clean A/B太理想，中A优于B、强A优于B。B路口：clean A/B太理想，中B优于A、强B优于A。C/D增道：clean A/B及medium A/B均太理想，hard A优于B。相对偏好不等于未选样例绝不合理，不能由此直接标定发生概率。
+用户新示意图：左道路/参考，右紫色感知是平顺线条，不同起止/可见长度，部分线局部弯曲/倾斜/曲率偏差，右侧线有缺口；想要有概率出现此类误差，并非每帧硬造。当前observe的片段平移+点抖动不足，应优先考虑低频连续几何/拟合偏差及可见段变化，保留正常/较准观测与不同线独立失效的混合。只保存反馈并解释图意，尚未改感知器或训练。
+
+## 2026-11-05：已生成4场景28份感知观测供用户定性审核
+
+用户同意先生成，不等当前重训完成。新增scripts/build_perception_review.py及README_PERCEPTION_REVIEW.md；CPU生成outputs/perception_review/20261105_v1，未训练/推理，不改既有observe/训练数据。
+四场景：A路口左转seed30000000、B路口右转30007919，均entry前5m；C右侧2→3增道44000000、D左侧3→4增道44000004，均过渡前8m；仅增道无减道，保留物理unmarked公共空白。
+每例同World/ego/GT/Guide/nav，主对照FOV统一85前/18后/±22侧，基准无几何噪声/随机缺失+当前clean/medium/hard误差参数各A/B两次固定seed直接抽样，不筛选。图另有物理真值面板；共28输入，实际模型编码最多32×32，全部无容量丢弃。range_comparison.png另单独示当前三档FOV差异且关随机扰动。
+入口gallery.html可给每张标常见/偶尔有/不合理+备注，本地存储、下载feedback JSON，不上传。各例comparison.png、detail.png、各档独立PNG/输入JSON、world/truth_ego/context，manifest记录参数/seed/几何偏差统计。浅灰物理真值背景不是输入，浅黄=物理无内部标线区，绿GT橙Guide非模型预测。
+已查看A/C整组图、验证28反馈卡片及所有链接存在、JS语法、同场景GT/Guide/FOV不变量、增道约束、编码有限数值、2例按manifest种子逐对象精确重现。噪声裁剪后可能少量越FOV边，保留现有模拟器行为；角度噪声主要用于区域框，线条为平移+点噪声且每可见段最多一缺口。等待用户定性评价再调参数；不宣称已真实标定。
+
+## 2026-11-05：用户收窄分流范围为增道；感知无需用户先定量
+
+用户明确纠正：下一版分流暂不考虑减道，只考虑增道；这是后续生成范围，不改既有训练数据或打断其当前重训。用户确认误删最新混合权重且无备份，已自行重新训练。
+重新核实当前600World分流generation_report及train样本、build_samples：正式数据45360行，调用observe，clean/medium/hard均已叠加FOV裁剪/漏检/可见段断裂/位置噪声和偏移，convention vcs_visible_segment_breaks_v2；混合分流子集也保留该约定。物理World600例全部unmarked，物理空白区不等同感知漏检。前一轮新标准化3例只做确定性裁剪，无随机感知噪声，不应与正式训练数据混淆。
+用户难以定量描述目标感知；后续应基于其画的可见片段原型做同World分档预览，用定性审核收敛，不要求先给漏检概率/噪声方差。无真实统计时现有参数只是可解释假设，不声称真实标定；先查清洁/轻扰动下道路修正，再增加困难观测。
+
+## 2026-11-05：标准化三例已运行单路口权重；当前缺失最新混合增强权重
+
+用户问标准化结果，发现此前未有预测，遂执行CPU三例。当前工作区outputs/training_road_mixed_guide_aug_v1整个目录不存在，原mixed_v2也不在；已查本项目及/mnt可见候选，未找到目标权重；异步问用户新混合权重位置，尚待回复。不用context_comparison_inside13/mixed替代最新模型。
+单路口guide_training_v1/aug/best.pt仍在，结果outputs/custom_comparison/20261105_standardized_v2，comparison.png、summary.json、findings.md、compare.py，三子例intersection_aug含input/prediction.json/png。
+人工参考ADE Guide→模型：straight .6801→.6332、left_turn2.6231→1.3265、right_split .8350→.5934m。出口横向绝对均值 .8→.7774、2.5→1.2425、.8→.5250m（投影参考，出口按参考s>=40/38/60的同索引预测点）。三个中心线均无完整道路/目标走廊外长度、无观测或完整World curb相交；左转向内Guide偏差被修到向外1.24m，仍过修。非车辆轮廓安全检查。
+当前只评单路口，混合对照未完成，不能把此结果称为混合模型或因果证明原自定义不真实。需要用户提供/同步最新混合权重后用新输出目录补对照。compare.py ROOT=parents[3]，可复制到同层新目录复跑避免旧结果覆盖。
+
+## 2026-11-05：标准化、目标已标注的自定义诊断样例
+
+用户要求创建连接明确、FOV统一、目标已标注版本。新增独立脚本scripts/build_standardized_custom_cases.py，输出outputs/custom_standardized/20261105_v2（v1为本轮初始预览保留），3例straight/left_turn/right_split；gallery.html、overview.png、各例preview/input/scene/annotation/world、validation.json。说明README_STANDARDIZED_CUSTOM_CASES.md。
+按原意图重建，非原图自动GT，也非完整四臂路口复刻。车道3.5m，曲线切向连续，自车/Guide/参考起点0，Guide和参考各81点。左转为双车道90°连接，nav当前left，Guide提前2.5m并出口向内偏2.5m、有意保留curb冲突。分流为明确2→3自然扇出目标新增右出口，nav为后续右转准备，过渡x12–52、空白16–46，Guide滞后8m且偏左.8。直行navstraight/Guide渐偏右.8。
+BEV严格[-18,85]x[-22,22]米裁剪，不加随机噪声/漏检，.99置信度；规划Guide/参考不裁FOV。world/targetcorridor侧文件仅审计，input带gt_path仅人工参考；编码器带/不带gt逐张量相同。自动检查道路/走廊覆盖、无token丢弃、FOV、采样、Guide起点、编辑器roundtrip通过。scene保留完整密集Guide，避免81点弦长<80导致重新保存被拒。
+已查看左右预览；图中绿色/浅绿都是人工标签非模型预测。未运行模型/训练，也未改既有生成器或用户数据。标签不作为额外模型输入，不声称外部标注自动解决可观测性问题。
+
+## 2026-11-05：执行单路口Guide增强权重复跑左转，未支持混合是主要原因
+
+用户明确要求代跑此前几个真正左转案例。使用guide_training_v1/aug/best.pt CPU跑183404和183817两份输入；134852与183404完全相同不重复。结果新存outputs/custom_comparison/20261105_intersection_guide_only/case_183404和case_183817，overlay comparison.png、summary.json、compare.py、findings.md。
+逐份输入完全一致。第一例单路口和混合增强都避给定curb，但均偏至相邻车道；y40截面相对line1/line2中点偏差混合4.652、单路口4.968m。第二例均穿curb1（混合x16.570/y17.611，单路口x15.773/y19.930）；单路口偏差稍小仍失败。非GT不称ADE。
+已向用户修正：近直道表现更好不能推广到左转，本次不支持把主要问题归因混合负迁移。共享数据规则/道路-Guide覆盖与几何约束仍是待查因素，混合干扰不排除。未修改输入或权重，未训练。
+
+## 2026-11-05：同一近直道输入，单路口增强模型优于混合模型的居中参考
+
+custom_inference/20261105_185446_664301为mixed-guide-aug，185508_642331为单路口guide_training_v1/aug；input.json完全相同，模型均v1XY。Guide起点已改到(-.0782,-.2289)，预测首段.934/.978m，之前10m缺口已消除。
+两预测逐索引平均差1.30479m、末点差1.11775m（非ADE）。若line1/line2为目标道路带，x40/60/75截面混合预测偏中点右1.022/.935/.812m，单路口偏左.572/.355/.329m。两者均未穿给定标线/路沿，无GT不可称ADE或全程安全。两者都相对Guide向左修正，混合幅度不足，单路口更接近中点。
+支持该案例单路口模型居中更好、混合可能有任务干扰；不能从此单例证明整体负迁移或路口模型更依赖BEV，两个训练还存在感知重导出/预算差异。未改模型/输入。
+
+## 2026-11-05：确认单路口Guide增强权重仍在；新直道案例起点前移
+
+用户想比较custom_inference/20261105_185048_579894。已加载核实outputs/guide_training_v1/aug/best.pt（epoch78，val ADE.624594，train=v4_world300_inside13，Guide增强p.5）仍在且是v1 XY，同当前混合架构适合比较。v2 aug也在（epoch88，ADE.649179，output_frame guide_sl），不优先用于单因素对比。
+新案例当前加载training_road_mixed_guide_aug_v1，navleft但Guide/道路基本直行。Guide起点(10.2619,.2866)，终点x90.254；预测强制p0原点，p1=(11.2528,.1501)，首段约11.25m，非正常1m路径步长。不能把起点非零一般性要求撤销，但本例10m切向缺口需单独标出，较此前小侧偏更严重。
+x40 line1/line2界y2.535/-.885，Guide y-.141，预测-.759；目标若为该道路带则预测更贴右界。无给定标线/curb相交，无GT。给用户命令用归档input.json跑单路口v1权重，未代为推理或改输入。
+
+## 2026-11-05：准备路口Guide增强 + 原分流混合训练
+
+用户要求先尝试此前同路多Guide增强+分流，由用户训练，暂不改道路几何生成器。
+新增configs/train_road_mixed_guide_aug_v1.json，沿用road_mixed_v2划分/结构/Loss/seed42/batch16/150epoch/25早停，输出outputs/training_road_mixed_guide_aug_v1，强制cuda；Guide cache outputs/guide_train_cache_road_mixed_v1，p=.5。
+旧cache不能直接用于混合：脚本scripts/build_training_guide_cache.py新增--mixed-source outputs/road_mixed_v2；--source仍outputs/v4_world300_inside13提供物理World/routes。生成version2缓存，绑定完整混合训练指纹，仅选择intersection左右转；8变体/route、跨pose一致。Dataset/guide_augmentation.py兼容v1/v2缓存，分流（含左右导航）保持原Guide，路口直行保持原样；训练样本数不变，总增强率约9.8%。
+README_MIXED_GUIDE_AUG.md给出CUDA检查、缓存构建、从头训练、评估命令。未启动完整缓存或正式训练。旧模型/数据/输出保留。
+小型混合测试证明仅路口turn Guide改变，其余tensor逐项完全一致、训练指纹及缺失key拒绝；原确定性与resume测试通过。
+
+## 2026-11-05：生成器与自定义场景的覆盖差异复核
+
+重新核对Scenario/build_dataset_v4.py、build_lane_transition.py、World/intersection_generator*.py及当前混合配置。
+共同：Guide/GT共享入口出口及道路变形参数，每route单Guide；联合v2 guide_augmentation=null。物理几何、Guide、GT相关性过强有学习模板修正规律风险，但不能据此认定泄漏或证明模型结构无问题。自车pose均位于GT并沿GT切向，缺横向/航向偏差恢复。
+路口：base cfg w3.5/r9，四臂+共享ArmWarp（有随机角度/侧移及车道数，并非完全固定十字路口）；GT固定.45 chord控制柄，Guide仅入口±.4/出口±3/同一柄比例变化；缺独立起终点方向/局部曲率。nav决定出口臂，出入口lane为随机可行组合，Guide偏差可能令目标车道身份不明确，需目标/可达性审计。
+分流：五模板、World等宽3.3–3.8、35–50m过渡、同一smooth基线、分段直线Guide、GT五次式；槽位差<=1误排2→4最外自然扇出。现有物理空白段/感知漏检断裂均已存在，问题非“无缺失”或“无冲突”。
+新确认左转自定义134852出口线延伸至ego y≈71m；当前感知clean最大left22（medium15/hard9），所有三条出口长线大部在训练FOV外。直接在编辑器画远线没有与训练统一感知裁剪；这是接口分布不一致，非证明唯一原因，需决定部署FOV并做一致对照。
+验证按World隔离正确，但仍同规则，且混合指标被约70%简单分流主导；需规则外挑战集、出口身份/边界/连续性指标。无改代码或训练。
+
+## 2026-11-05：自定义路口趋势也不能证明道路理解
+
+复核custom_inference/20261105_134852_861921，navleft，联合v2 best，全部6元素保留，无GT；5例CPU对照存outputs/custom_input_diagnostics/20261105_intersection_review。
+Guide穿两段curb，预测均避开；但若目标为Guide所指line1/line2道路带，预测出口先走line2/line3带，再在(x20.94,y59.69)穿line2回切。y30截面相对line1/2中点Guide偏.850m，预测偏2.777m（截面参考非GT/ADE）；起步先右偏.671m再左转存在折点。
+原预测相对Guide平均XY修正4.529m（含纵向），清空全部BEV后原预测平均只变.278m且仍避开原路沿、仍同类跨线。仅去curb.249m、去cross.090m、nav改straight.534m。不能把避沿直接归因于路沿输入，也不能说完全忽略BEV。
+当前证据更符合Guide/nav及训练先验主导总体修正、实际边界控制和出口保持不足；单例不能推广为所有路口失败。下一步需共同挑战集与明确出口GT，做道路/Guide反事实对照。
+
+## 2026-11-05：车道宽度调整后仍偏Guide（两个新案例）
+
+复核custom_inference/20261105_132723_406979、133929_954093，并执行14例CPU固定checkpoint消融。报告outputs/custom_input_diagnostics/20261105_width_review/findings.md、summary.json、comparison.png。
+两例Guide逐点相同且nav=straight，BEV改变预测平均只变5.22cm。清空BEV平均变化11.14/7.12cm，统一正/反点序均不影响，黄改白1.75/.42cm。全部元素保留、CPU复现误差<.1mm。
+x70标线间距第一例3.80/3.50/2.89，第二例2.85/3.29/2.92m（横截面近似宽，部分仍比训练3.3–3.8窄）。若line3/line2道路带为目标，Guide→预测相对中点偏左1.123→1.440m、.180→.419m；第二例x30 .483→.744m。第一例x61.244穿过虚线line3，不能只凭虚线相交称违法；两例无给定路沿相交，无GT不称ADE。
+说明宽度不是充分解释，更符合Guide先验/任务覆盖不足，但非严格宽度单因素训练或模型结构排除。建议先固定挑战集明确目标，再做同路多Guide（正负偏移/曲率）训练对照及出口稳定检查；未改生成器/模型。
+
+## 2026-11-05：编辑器邻线测距与保存断线修复
+
+用户反馈拖动难估车道宽、保存Failed to fetch。主机检查127.0.0.1:8765连接拒绝，原前台服务已退出，并非Guide长度/JSON编码报错。
+新增tools/scene_editor/measurement.js，选中线的局部曲线测点→邻线分段投影最短距离，拖动/悬停实时显示辅助线、米值、邻线ID及测点坐标。默认仅BEV line/curb，可选仅line或含Guide；不是全线最短距离或法向道路宽度。Bezier控制柄先投影到实际曲线，不拿柄坐标当道路点。
+新增/api/health、前端连接状态、断线明确恢复说明、失败立即保存localStorage及pagehide保留；下载草稿仍纯前端。
+scene_editor.py --background [--open]支持独立终端运行，启动健康检查，日志/PID写新server_<时间>目录；不替换占用端口的旧服务。
+已恢复8765后台服务，PID796360，日志outputs/scene_editor/server_20261105_132310_738153/server.log。旧页面可直接再保存，加载测距功能需先下载草稿备份再刷新。
+12项Python导出测试通过；Node几何测试通过；Chrome浏览器验证真实拖动距离层、保存、模拟断线/草稿保留/重连保存及原有功能通过。截图outputs/scene_editor/browser_validation_brG2gC/editor.png，验证输入20261105_132326_748955/input.json。
+未改模型、生成器或用户examples/custom_input_split.json。
+
+## 2026-11-05：三个自由绘制分流案例与输入消融
+
+用户反馈custom_inference/20261105_113815_926244、130333_555172、130508_350433效果一般。
+复核原预测+15例CPU单因素消融，报告outputs/custom_input_diagnostics/20261105_three_scenes/findings.md，图three_scenes_ablation.png。
+导出/语义/容量正常；CPU复现GPU最大差0.000363m。BEV清空预测平均变0.356/0.404/0.423m，改nav直行变0.675/0.315/0.311m，confidence1→.99只变0.2–0.3mm。第三例只去路沿变1.53cm，路沿与外侧标线冗余，不能断言完全忽略路沿。
+第二、三例Guide一致、BEV多处不同，预测平均差2.75cm；非单独加路沿的严格对照。
+若最右可见道路带是目标，x70处三预测偏离两界中点向左1.64/1.93/1.53m；Guide已经偏左，预测仍继续左移约0.4m。无GT，不能称ADE；宽间隔也可能是中间标线漏检。
+主要疑点：训练五模板、等宽车道、共享边界变形和Guide/GT生成规律，覆盖自由曲率/非齐次标线/导航连接不够；此前槽位差约束过强仍未修订。验证7cm只表示同生成规则下World泛化，不代表自由场景已学会道路修正。未改模型/数据或训练。
+
+## 2026-11-05：本地BEV场景编辑器已完成
+
+用户要求先做工具：Guide/BEV line/curb，指定起终点，自由调整形状，选中编辑语义，选择导航后自动采样保存。
+入口scene_editor.py（Python标准库HTTP，127.0.0.1:8765）；前端tools/scene_editor/，说明README_SCENE_EDITOR.md。导出使用已有infer.prepare_sample/encode_input，不改模型/训练。
+支持两点创建三次Bezier并拖控制柄、折线增删节点、数字坐标、画布平移缩放、撤销重做、导入原JSON/编辑工程、置信度及车道线颜色/实虚线、导航选择。额外支持停止线/斑马线矩形。
+保存到outputs/scene_editor/<时间>/input.json（Guide81点/前80m）、scene.json（控制点原稿）、model_input.npz（实际32×32×6编码及10维属性）。Guide短于80m报错，不拉伸，Guide起点偏移保留。
+12项tests/test_scene_editor.py通过；Chrome真实浏览器测试通过拖动/绘制/属性/导航/撤销/保存/导入/短Guide错误。可复跑tests/scene_editor_browser_smoke.cjs（运行编辑器后node执行）。
+已用导出JSON运行联合v2 best的CPU单样本infer，输出outputs/scene_editor/browser_validation/inference；浏览器截图outputs/scene_editor/browser_validation/editor.png。
+已启动本机8765服务（本轮tool会话67197）；后续如服务已退出，用户运行python scene_editor.py --open。未修改examples/custom_input_split.json的用户改动。
+
+## 2026-11-05：自定义分流仍偏Guide，发现目标覆盖缺口
+
+复核custom_inference/20261105_095353_374408，联合v2、cuda。无GT；预测后40m相对Guide位移仅0.1058m，x79末段接近Guide且相对推断右侧目标车道中心偏右约0.972m。
+给定路沿只到x65，预测中心线未交该已观测片段，不能作全程车身碰撞保证。全部7个元素保留。
+重要生成规则不足：自定义近似2→4右侧增道，Guide指向最外新增出口3；训练按abs(exit-entry)<=1筛选，此模板入口0/1只见出口0/1/2，从未以出口3作GT目标。已核查urban_transition_0044000002/routes.json。
+新增车道的自然扇出不等价于跨越多条已有车道，当前索引差约束过强；这是覆盖缺口，不是已证明的全部失败原因。自定义约79m外扩也超出当前35–50m训练长度。
+分析存 outputs/custom_input_diagnostics/20261105_split_review/findings.md。用户询问绘图导出JSON方法，仓库暂无编辑器，建议本地BEV矢量画布导入/编辑/导出infer兼容JSON，尚未实现。
+
+## 2026-11-05：新版联合训练完成并评估
+
+training_road_mixed_v2 best为epoch101，第126轮早停，6291条验证ADE0.2349355m，FDE0.3361319m。
+路口1890条ADE0.6122467m/EmptyBEV1.1904723m；新分流4401条0.0729000m/EmptyBEV0.1648056m/Guide0.6044817m。
+分流clean/medium/hard ADE0.06908/0.07023/0.07939m；左右直导航均约6–8cm。
+额外只分析保存预测：analysis_20261105/transition_region_summary.json与findings.md。
+分流before10/during按GT世界x落入过渡段的局部ADE0.07220/0.07498m，公共内部无标线区0.07800/0.06569m（各1467例），EmptyBEV公共空白区0.28975/0.13919m。after5无可评价未来过渡点。
+支持当前分布内分流修正较准且利用感知，不是仅靠出口长直线拉低ADE；仍未评价道路/车道合法性及自定义分流泛化。
+路口entry1.10825m、approach10 0.95723m，仍是主要难点；约70%的分流验证样本使混合指标更低，不代表路口0.235m。
+
+## 2026-11-04：联合训练实际在CPU，定位CUDA故障
+
+用户发现epoch约530s。核实 training_road_mixed_v2/last.pt epoch59的cuda_rng=None，训练配置device=auto，实际退回CPU。
+在主机（隔离环境外）复现 torch2.9.1+cu128 CUDA初始化失败；libcuda cuInit=999 CUDA_ERROR_UNKNOWN。
+nvidia-smi能识别RTX3050 Laptop，设备节点权限/主设备号正常，未设置CUDA_VISIBLE_DEVICES或LD_LIBRARY_PATH/LD_PRELOAD。
+内核日志：10月30日22:13:45休眠恢复，22:13:48 Xid31 MMU Fault，随后Xid154明确记录Node Reboot Required；本次启动始于10月21日，故障后未重启。
+建议用户先停止训练，保留last/best，重启电脑后检查CUDA可用并用--resume last.pt --device cuda继续；未执行停止、重启或驱动改动。
+
+## 2026-11-04：下一轮联合训练指令与配置已准备
+
+用户要求自行执行混合/训练，路口选之前含Guide越界案例的 outputs/v4_world300_inside13。
+新增 configs/train_road_mixed_v2.json 和 README_MIXED_ROADS_V2.md，混合输出 outputs/road_mixed_v2，训练 outputs/training_road_mixed_v2。
+模型仍v1 XY residual+原Loss、seed42，从头训练，不开旧Guide缓存增强或FOV补充。最多150轮、25轮早停，按混合val ADE选best，分组记录两场景。
+混合命令refresh-perception intersection，使用现有World统一路口感知断裂规则，GT/Guide/pose/split不变；分流已含感知，不重叠加。
+预计train51462（路口15120+分流36342）、val6291、test6507，自然训练比例29.4%路口/70.6%分流。
+本机尚未执行此新混合或正式训练；由用户运行文档命令。
+
+## 2026-11-04：600 World正式批量与感知样本生成完成
+
+用户授权批量生成，并强调World不能直接训练、必须叠加感知。已完成 outputs/urban_lane_transition_world600_v1，validation_report.json passed=true。
+600 World，seed44000000，已确认的5模板各120 World；35–50m随机过渡，全部unmarked，分段一次Guide、left/straight/right导航。
+每World已调用observe叠加clean/medium/hard的FOV裁剪、漏检、可见段断裂、位置噪声；训练输入不是物理World线。
+合计45360行；train480 World/36342行，val60/4401，test60/4617。每种导航15120行，每档质量15120行，每个pose15120行。
+28条hard空BEV样本按现有漏检设定保留；clean/medium无空BEV。所有GT/Guide形状、间距、质量间一致性及World划分校验通过，抽查454条实际编码。
+训练应读取该目录audit/train.jsonl、val.jsonl；worlds保留物理真值用于审计和绘图。尚未混合路口或启动训练。
+为控制内存，生成器改成逐World写盘；改造后5-World样本及三个划分与原版逐字节一致。正式批次4个150-World分片并行，最终按全局seed重新划分（不使用分片局部划分）。
+串行中途输出保留在 outputs/urban_lane_transition_world600_v1_partial_serial，标记INCOMPLETE，不能训练；正式数据以无partial后缀目录为准。
+可复核 generation_report.json、generation_provenance.json、validation_report.json；图集gallery.html及overview.png。
+
+## 2026-11-04：用户确定过渡区35–50m随机
+
+urban道路过渡长度由35–80m改为35–50m均匀随机；CLI默认marking-pattern改为unmarked。
+无标线区名义起点为过渡长度10–20%、终点76–88%，各线端点另有±3.5%长度扰动，保留共同空白区。
+新5 World预览 outputs/urban_lane_transition_preview_v4_length35_50，旧版保留，未训练。
+
+## 2026-11-03 更新：补充物理内部无标线区域
+
+用户指出上一版内部线过于完整。新增 --marking-pattern mixed|unmarked|partial|continuous，CLI默认mixed。
+新预览 outputs/urban_lane_transition_preview_v3_marking_gaps：5 World，按无内部标线/部分缺失/连续/无内部标线/部分缺失排列。
+原路沿、外侧实线、GT/Guide和导航目标保留，同seed不同标线模式只修改内部标线；感知随机序列可能变化。
+完整缺失模式各线起止略不同，但保证共同空白区；两侧片段独立对象，编码不跨缺口连接。浅黄色标出公共空白区。
+上一版v2及所有旧输出保留；未启动训练。
+
+## 2026-11-03：城区增减道导航预览，尚未训练
+
+用户确认要正常城区增减道 + 后续导航意图 + Guide 车道指引，避免跨多车道不合理跳转。
+Scenario/build_lane_transition.py 新增 urban CLI 默认模式；旧 make_world 及 --scene-mode legacy 保留。
+5 World预览 outputs/urban_lane_transition_preview_v2，378行、多导航/pose/quality；按World分3/1/1，只用于确认形态。
+导航 left/right 选择可达范围物理左/右出口，straight 最小横移；最多相邻一槽位调整，不可达入口省略。
+道路过渡35–80m；持续分隔线保留，新增/消失线在各自位置起止，Guide带位置和相位误差。
+每张预览 nav行×pose列，clean质量，同一入口便于对比。尚未实现同路多Guide、车速/动力学约束。
+本机没有 outputs/training_road_mixed_v1 及其数据；此前联合成绩来自交接记录，未复现联合模型自定义失败。
+自定义输入 examples/custom_input_split.json 的 navigation=right，旧增减道全部straight；输入约79m缓慢扩宽，旧训练仅15–25m。
+导航straight对照另存 outputs/custom_split_audit/20261103/custom_input_split_straight.json，原输入未改。
+
+
 ## 2026-10-30：联合模型 best 评估与分流过渡段诊断
 
 用户已运行 `outputs/training_road_mixed_v1/eval_best_val`。总ADE0.360673m、EmptyBEV0.650670m。

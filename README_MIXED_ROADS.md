@@ -1,12 +1,14 @@
 # 路口 + 增道/减道联合训练
 
+下列是已训练首轮的 legacy 配方。新版 urban 导航预览见 README_LANE_TRANSITION.md；确认形态前暂不按新版启动批量训练。
+
 在项目根目录激活 toybev 后，按顺序执行下面三步。脚本已准备好；完整数据生成和训练由你执行。
 
 ## 1. 生成 600 个分流 World
 
 ```bash
 python -m Scenario.build_lane_transition \
-  --worlds 600 --seed 42000000 \
+  --worlds 600 --seed 42000000 --scene-mode legacy \
   --guide-shape piecewise_linear \
   --perception-config perception_v4.example.json \
   --preview-worlds 5 \

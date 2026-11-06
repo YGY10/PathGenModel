@@ -1,0 +1,12 @@
+const assert=require('node:assert/strict');
+const {closest,measure}=require('../tools/scene_editor/measurement.js');
+const a=[[0,0],[80,0]];
+let m=measure(a,[40,8],[{id:'lane',points:[[0,3.5],[80,3.5]]}]);
+assert.equal(m.distance,3.5);assert.deepEqual(m.anchor,[40,0]);
+m=measure(a,[40,0],[{id:'far',points:[[0,7],[80,7]]},{id:'near',points:[[0,-3.5],[80,-3.5]]}]);
+assert.equal(m.id,'near');assert.equal(m.distance,3.5);
+assert.equal(measure(a,[40,0],[{id:'cross',points:[[40,-5],[40,5]]}]).distance,0);
+assert.equal(measure(a,[40,0],[]),null);
+assert(Math.abs(closest([2,3],[[0,0],[0,0]]).distance-Math.sqrt(13))<1e-12);
+assert.equal(closest([0,0],[[10,0],[20,0]]).distance,10);
+console.log('PASS: parallel 3.5 m, off-curve probe projection, nearest candidate, intersection, missing neighbor, degenerate segment, endpoint.');

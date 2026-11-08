@@ -12,7 +12,18 @@ venv/
 .codex/
 .agents/
 .aws/
-outputs/
+outputs/*
+# Keep hand-drawn scene archives portable; other experiment outputs stay local.
+!outputs/scene_editor/
+outputs/scene_editor/*
+!outputs/scene_editor/gallery.html
+!outputs/scene_editor/README.md
+!outputs/scene_editor/20*/
+outputs/scene_editor/20*/*
+!outputs/scene_editor/20*/scene.json
+!outputs/scene_editor/20*/input.json
+!outputs/scene_editor/20*/scene.png
+!outputs/scene_editor/20*/model_input.npz
 .publish_staging/
 research_artifacts/*.tar.gz
 *.log

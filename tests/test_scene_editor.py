@@ -108,3 +108,55 @@ def test_backfill_adds_only_missing_previews_and_preserves_originals(tmp_path):
     second=backfill_previews(tmp_path)
     assert second['created']==0 and (folder/'scene.png').read_bytes()==png
     assert 'test_scene' in (tmp_path/'gallery.html').read_text()
+
+
+def test_gt_is_sampled_as_label_without_changing_any_model_features(tmp_path):
+    p=project()
+    _,baseline,_=export_project(p)
+    p['entities'].append({'id':'gt_1','kind':'gt','mode':'polyline',
+                          'points':[[0,0],[30,40],[90,40]]})
+    row,encoded,summary=export_project(p)
+    np.testing.assert_allclose(row['gt_path'][50],[30,40])
+    np.testing.assert_allclose(row['gt_path'][80],[60,40])
+    assert summary['gt_points']==81 and summary['supplied']==2
+    for key in baseline:
+        np.testing.assert_array_equal(baseline[key],encoded[key])
+    saved=save_project(p,tmp_path)
+    restored=import_project(json.loads(Path(saved['scene_path']).read_text()))
+    assert restored==p
+    assert json.loads(Path(saved['input_path']).read_text())['gt_path']==row['gt_path']
+
+
+def test_legacy_gt_import_becomes_editable_without_mutation():
+    p=project();p['gt_path']=[[i,0] for i in range(81)]
+    original=json.loads(json.dumps(p))
+    restored=import_project(p)
+    assert p==original and 'gt_path' not in restored
+    assert restored['entities'][-1]['kind']=='gt'
+    assert export_project(restored)[0]['gt_path']==original['gt_path']
+
+
+@pytest.mark.parametrize('vertices,message', [([[0,0],[50,0]],'GT 长度'),
+                                           ([[0,1],[85,1]],'GT 起点')])
+def test_invalid_gt_cannot_write_partial_save(tmp_path,vertices,message):
+    p=project();p['entities'].append({'id':'gt','kind':'gt','mode':'polyline','points':vertices})
+    with pytest.raises(ValueError,match=message):save_project(p,tmp_path)
+    assert not list(tmp_path.iterdir())
+
+
+def test_duplicate_gt_is_rejected():
+    p=project()
+    for name in ('gt_a','gt_b'):
+        p['entities'].append({'id':name,'kind':'gt','mode':'polyline','points':[[0,0],[85,0]]})
+    with pytest.raises(ValueError,match='只能有一条 GT'):export_project(p)
+
+
+def test_gt_centering_archive_is_saved_but_does_not_enter_model_input(tmp_path):
+    p=project();p['entities'].append({'id':'gt','kind':'gt','mode':'polyline',
+        'points':[[0,0],[85,0]],'original_handdrawn':{'mode':'polyline','points':[[0,0],[85,.7]]},
+        'centering_history':[{'left':'line','right':'curb','start':20,'end':70,'blend':5}]})
+    saved=save_project(p,tmp_path)
+    source=import_project(json.loads(Path(saved['scene_path']).read_text()))
+    assert source['entities'][-1]['original_handdrawn']==p['entities'][-1]['original_handdrawn']
+    row=json.loads(Path(saved['input_path']).read_text())
+    assert 'original_handdrawn' not in row and 'centering_history' not in row

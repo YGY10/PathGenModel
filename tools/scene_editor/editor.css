@@ -5,3 +5,5 @@
 #saved-preview{display:block;font-size:12px;margin:6px 0;color:#2764c6}#saved-preview[hidden]{display:none}
 
 #rotate-minus,#rotate-plus,#rotate-apply{white-space:nowrap;padding-left:6px;padding-right:6px}
+
+#centering .pair{display:grid;grid-template-columns:1fr 1fr;gap:5px}#centering button{white-space:nowrap;padding:7px 3px;font-size:12px}

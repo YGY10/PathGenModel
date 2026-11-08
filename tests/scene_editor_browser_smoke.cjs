@@ -92,13 +92,104 @@ const timer=setTimeout(()=>{browser.kill('SIGKILL');console.error('Browser test 
  assert.deepEqual(signature,[137,80,78,71,13,10,26,10]);
  const rotatedPath=await evaluate(`document.getElementById('saved-path').textContent`),rotated=JSON.parse(fs.readFileSync(rotatedPath));
  assert(Math.abs(rotated.stop_lines[0].points[0][0]-22.2)<1e-8);assert(fs.existsSync(path.join(path.dirname(rotatedPath),'scene.png')));
- assert(fs.readFileSync(path.join(root,'outputs/scene_editor/gallery.html'),'utf8').includes(path.basename(path.dirname(rotatedPath))));
+ assert(fs.readFileSync(path.join(path.dirname(path.dirname(rotatedPath)),'gallery.html'),'utf8').includes(path.basename(path.dirname(rotatedPath))));
  await evaluate(`document.querySelector('[data-select="line_1"]').click();document.getElementById('measure-kind').value='line';document.getElementById('measure-kind').dispatchEvent(new Event('change'));document.getElementById('measure-target').value='line_2';document.getElementById('measure-target').dispatchEvent(new Event('change'));`);
  await screenshot('editor_features.png');
+ // Arrows translate the whole selected box in screen directions, including fine steps.
+ await evaluate(`document.querySelector('[data-select="stop_1"]').click()`);
+ const boxBefore=await evaluate(`JSON.parse(JSON.stringify(current().points))`);
+ async function arrow(key,modifiers=0){await send('Input.dispatchKeyEvent',{type:'keyDown',key,code:key,modifiers},session);await send('Input.dispatchKeyEvent',{type:'keyUp',key,code:key},session);}
+ await arrow('ArrowUp');await arrow('ArrowRight',8);await arrow('ArrowLeft',1);
+ const boxAfter=await evaluate(`current().points`);
+ boxAfter.forEach((p,i)=>{assert(Math.abs(p[0]-boxBefore[i][0]-.1)<1e-9);assert(Math.abs(p[1]-boxBefore[i][1]+.99)<1e-9);});
+ await button('undo');await button('undo');await button('undo');
+ assert.deepEqual(await evaluate(`current().points`),boxBefore);await button('redo');await button('undo');
+ // Input fields retain normal arrow behaviour and must not translate the object.
+ await evaluate(`document.getElementById('rotate-angle').focus()`);await arrow('ArrowUp');
+ assert.deepEqual(await evaluate(`current().points`),boxBefore);
+ await evaluate(`document.activeElement.blur()`);
+ // Create editable GT from Guide; duplicate is blocked; all model feature arrays stay identical.
+ const guideBefore=await evaluate(`JSON.stringify(project.entities.find(e=>e.kind==='guide'))`);
+ await button('guide-to-gt');assert.equal(await evaluate(`current().kind`),'gt');
+ assert.deepEqual(await evaluate(`current().points[0]`),[0,0]);
+ assert.equal(await evaluate(`JSON.stringify(project.entities.find(e=>e.kind==='guide'))`),guideBefore);
+ await button('guide-to-gt');assert.equal(await evaluate(`project.entities.filter(e=>e.kind==='gt').length`),1);
+ await arrow('ArrowUp');assert.equal(await evaluate(`current().points[0][0]`),.1);await button('undo');
+ await arrow('ArrowRight');assert.equal(await evaluate(`current().points[0][1]`),-.1);await button('undo');
+ await button('preview');await wait(`sampled && sampled.gt && sampled.gt.length===81`);
+ await button('save');await wait(`!document.getElementById('save').disabled && !document.getElementById('result').hidden`);
+ const gtPath=await evaluate(`document.getElementById('saved-path').textContent`),gtInput=JSON.parse(fs.readFileSync(gtPath));
+ assert.equal(gtInput.gt_path.length,81);assert.deepEqual(gtInput.gt_path[0],[0,0]);
+ assert.equal(await evaluate(`sampled.summary.supplied`),gtInput.lane_markings.length+gtInput.road_boundaries.length+gtInput.stop_lines.length+gtInput.crosswalks.length);
+ const savedProject=JSON.parse(fs.readFileSync(path.join(path.dirname(gtPath),'scene.json')));
+ assert.equal(savedProject.entities.filter(e=>e.kind==='gt').length,1);
+ await screenshot('editor_gt_arrows.png');
+ // Saved input GT imports as an editable line. Direct drawing of GT works after deletion.
+ await evaluate(`setProject(${JSON.stringify(savedProject)})`);
+ await evaluate(`selected=project.entities.find(e=>e.kind==='gt').id;render()`);await button('delete');
+ await set('kind','gt',true);await set('mode','polyline');await set('sx','0');await set('sy','0');await set('ex','85');await set('ey','0');await button('add-numeric');
+ assert.equal(await evaluate(`current().kind`),'gt');assert.equal(await evaluate(`current().mode`),'polyline');
+ console.log('PASS: GT copy/edit/save/sampling and manual creation; duplicate guard; arrows for box/GT, modifier steps, undo/redo, input focus guard.');
  // Short Guide must produce a visible error and never a false success.
  await evaluate(`document.querySelector('[data-select="guide_1"]').click();const f=document.querySelector('[data-coordinate="3,0"]');f.value='50';f.dispatchEvent(new Event('change',{bubbles:true}));`);
  await button('save');await wait(`!document.getElementById('save').disabled`);
  assert(await evaluate(`document.getElementById('toast').textContent.includes('至少 80')`));assert(await evaluate(`document.getElementById('result').hidden`));
+ // Local centering is preview-only until applied, archives hand GT, and invalidates stale previews.
+ const centerProject={version:1,name:'centering_validation',navigation:'straight',entities:[
+ {id:'guide',kind:'guide',mode:'polyline',points:[[0,0],[85,0]]},
+ {id:'gt',kind:'gt',mode:'polyline',points:[[0,0],[10,.7],[85,.7]]},
+ {id:'left',kind:'line',mode:'polyline',points:[[0,2],[85,2]],color:'white',line_style:'dashed'},
+ {id:'right',kind:'line',mode:'polyline',points:[[85,-2],[25,-2],[0,-2]],color:'white',line_style:'solid'}]};
+ await evaluate(`setProject(${JSON.stringify(centerProject)});selected='gt';render()`);
+ await set('center-left','left');await set('center-right','right');await set('center-start','20');await set('center-end','70');await set('center-blend','5');
+ await button('center-preview');assert(await evaluate(`!centerPreview && document.getElementById('toast').textContent.includes('可信')`));
+ await evaluate(`document.getElementById('center-trusted').checked=true`);
+ const originalCenterGT=await evaluate(`JSON.stringify(current().points)`);
+ await button('center-preview');assert(await evaluate(`!!centerPreview && !document.getElementById('center-apply').disabled`));
+ assert.equal(await evaluate(`JSON.stringify(current().points)`),originalCenterGT);
+ await button('center-cancel');assert(await evaluate(`!centerPreview`));
+ await button('center-preview');await set('center-end','65');await evaluate(`document.getElementById('center-end').dispatchEvent(new Event('input',{bubbles:true}))`);
+ assert(await evaluate(`!centerPreview && document.getElementById('center-apply').disabled`));
+ await set('center-end','70');await button('center-preview');await screenshot('centering_preview.png');await button('center-apply');
+ assert(await evaluate(`current().mode==='polyline' && current().points.length>200 && !!current().original_handdrawn`));
+ assert.equal(await evaluate(`JSON.stringify(current().original_handdrawn.points)`),originalCenterGT);
+ assert(await evaluate(`current().points.filter(p=>p[0]>30&&p[0]<60).every(p=>Math.abs(p[1])<1e-9)`));
+ await button('undo');assert.equal(await evaluate(`JSON.stringify(current().points)`),originalCenterGT);await button('redo');
+ await button('save');await wait(`!document.getElementById('save').disabled && !document.getElementById('result').hidden`);
+ const centeredSave=await evaluate(`document.getElementById('saved-path').textContent`),centerScene=JSON.parse(fs.readFileSync(path.join(path.dirname(centeredSave),'scene.json')));
+ assert(centerScene.entities.find(e=>e.kind==='gt').original_handdrawn);
+ await evaluate(`setProject(${JSON.stringify(centerScene)});selected='gt';render()`);
+ assert.equal(await evaluate(`current().centering_history.length`),1);
+ await button('center-restore');assert.equal(await evaluate(`JSON.stringify(current().points)`),originalCenterGT);await button('undo');assert(await evaluate(`current().points.length>200`));
+ // Multiple disjoint objects representing the same continuous boundary, plus single-side modes.
+ const groupedProject=JSON.parse(JSON.stringify(centerProject));groupedProject.entities=groupedProject.entities.filter(e=>e.id!=='right');
+ groupedProject.entities.push({id:'right_a',kind:'line',mode:'polyline',points:[[0,-2],[45,-2]]},{id:'right_b',kind:'line',mode:'polyline',points:[[85,-2],[45,-2]]});
+ await evaluate(`setProject(${JSON.stringify(groupedProject)});selected='gt';render()`);
+ async function chooseMany(id,values){await evaluate(`(()=>{const s=document.getElementById(${JSON.stringify(id)});for(const o of s.options)o.selected=${JSON.stringify(values)}.includes(o.value);s.dispatchEvent(new Event('input',{bubbles:true}));})()`);}
+ await chooseMany('center-left',['left']);await chooseMany('center-right',['right_a','right_b']);
+ await set('center-mode','both',true);await button('center-preview');assert(await evaluate(`!!centerPreview && centerPreview.result.points.filter(p=>p[0]>30&&p[0]<60).every(p=>Math.abs(p[1])<1e-9)`));
+ await screenshot('boundary_groups_preview.png');
+ await set('center-mode','left',true);assert(await evaluate(`!centerPreview && document.getElementById('center-right-wrap').hidden`));
+ await set('center-width','3.5');await button('center-half-width');assert.equal(await evaluate(`document.getElementById('center-offset').value`),'1.75');
+ await button('center-preview');assert(await evaluate(`!!centerPreview && centerPreview.result.reference.every(p=>Math.abs(p[1]-.25)<1e-9)`));
+ await screenshot('single_left_preview.png');await button('center-apply');
+ assert(await evaluate(`current().centering_history.at(-1).mode==='left' && current().centering_history.at(-1).left[0]==='left' && current().centering_history.at(-1).right.length===0`));
+ await button('save');await wait(`!document.getElementById('save').disabled && !document.getElementById('result').hidden`);
+ const singleSave=await evaluate(`document.getElementById('saved-path').textContent`),singleScene=JSON.parse(fs.readFileSync(path.join(path.dirname(singleSave),'scene.json')));
+ assert.equal(singleScene.entities.find(e=>e.kind==='gt').centering_history.at(-1).offset,1.75);
+ await button('undo');await set('center-mode','right',true);await button('center-preview');
+ assert(await evaluate(`!!centerPreview && centerPreview.result.reference.every(p=>Math.abs(p[1]+.25)<1e-9)`));
+ await set('center-offset','0');await evaluate(`document.getElementById('center-offset').dispatchEvent(new Event('input',{bubbles:true}))`);await button('center-preview');assert(await evaluate(`!centerPreview && document.getElementById('toast').textContent.includes('偏移距离')`));
+ await set('center-mode','both',true);
+ console.log('PASS: multi-select fragments, left/right reference, width-to-offset, metadata persistence and invalid offset guard.');
+ // Preview the user's straight case, without applying or saving any changes to it.
+ const actual=path.join(root,'outputs/scene_editor/20261107_230623_690212/scene.json');
+ if(fs.existsSync(actual)){
+  const real=JSON.parse(fs.readFileSync(actual));await evaluate(`setProject(${JSON.stringify(real)});selected=project.entities.find(e=>e.kind==='gt').id;render()`);
+  await set('center-left','line_1');await set('center-right','line_2');await set('center-start','30');await set('center-end','65');await set('center-blend','5');
+  await button('center-preview');assert(await evaluate(`!!centerPreview`));await screenshot('centering_user_straight_preview.png');
+ }
+ console.log('PASS: local centre preview/cancel/apply, confirmation, invalidation, preservation, undo/redo and save/reimport.');
  assert.deepEqual(errors,[],'No uncaught browser errors');
  console.log('PASS: numeric creation; mouse Bezier drag; undo/redo; mouse polyline; semantics/nav editing; sampling preview; distance display; save; import round trip; offline draft and reconnect save; short-Guide error; curve/box rotation; explicit farther reference; saved PNG endpoint.');console.log('Saved input:',input);console.log('Screenshot:',path.join(out,'editor.png'));
  }finally{clearTimeout(timer);try{await send('Browser.close');}catch(e){}browser.kill();}})().catch(e=>{console.error(e.stack);process.exitCode=1;browser.kill('SIGKILL');});

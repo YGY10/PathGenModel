@@ -1,19 +1,19 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const svg=$('canvas');
-const names={guide:'Guide line',line:'BEV line',curb:'BEV curb',stop:'停止线',cross:'斑马线'};
-const colors={guide:'#e69a17',line:'#407fe8',curb:'#475569',stop:'#d75f61',cross:'#2baca9'};
+const names={guide:'Guide line',gt:'GT path',line:'BEV line',curb:'BEV curb',stop:'停止线',cross:'斑马线'};
+const colors={guide:'#e69a17',gt:'#16975d',line:'#407fe8',curb:'#475569',stop:'#d75f61',cross:'#2baca9'};
 const clone=x=>JSON.parse(JSON.stringify(x));
 const escape=x=>String(x).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const empty=()=>({version:1,name:'custom_scene',navigation:'straight',entities:[]});
 let project=empty(), selected=null, undo=[], redo=[], draft=null, drag=null, space=false, sampled=null, lastSave=null, dirty=0;
 let camera={x:-50,y:-95,w:100,h:110};
 let toastTimer,localTimer,measurementProbe=null;
-let rotationEntity=null;
+let rotationEntity=null,centerPreview=null;
 function toast(message,error=false){$('toast').textContent=message;$('toast').classList.toggle('error',error);$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,error?7000:3500);}
 function current(){return project.entities.find(e=>e.id===selected);}
 function remember(){undo.push(clone(project));if(undo.length>100)undo.shift();redo=[];}
-function changed(){dirty++;sampled=null;lastSave=null;$('result').hidden=true;clearTimeout(localTimer);localTimer=setTimeout(()=>{try{localStorage.setItem('pathgen_scene_editor_v1',JSON.stringify(project));}catch(e){/* Storage can be disabled; file saves still work. */}},300);}
+function changed(){centerPreview=null;dirty++;sampled=null;lastSave=null;$('result').hidden=true;clearTimeout(localTimer);localTimer=setTimeout(()=>{try{localStorage.setItem('pathgen_scene_editor_v1',JSON.stringify(project));}catch(e){/* Storage can be disabled; file saves still work. */}},300);}
 function undoAction(){if(!undo.length)return;redo.push(clone(project));project=undo.pop();if(!current())selected=null;draft=null;changed();render();}
 function redoAction(){if(!redo.length)return;undo.push(clone(project));project=redo.pop();if(!current())selected=null;changed();render();}
 function geometry(e){
@@ -28,7 +28,7 @@ function metric(event,snap=false){const p=svg.createSVGPoint();p.x=event.clientX
 function newId(kind){let n=1;while(project.entities.some(e=>e.id===`${kind}_${n}`))n++;return `${kind}_${n}`;}
 function create(kind,mode,p){
  if(project.entities.length>=256){toast('最多支持256个元素',true);return false;}
- if(kind==='guide'&&project.entities.some(e=>e.kind==='guide')){toast('已有 Guide，请选择它编辑或删除后重画。',true);return false;}
+ if(['guide','gt'].includes(kind)&&project.entities.some(e=>e.kind===kind)){toast(`已有 ${names[kind]}，请选中编辑或删除后重画。`,true);return false;}
  if(p.length<2||Math.hypot(p[0][0]-p.at(-1)[0],p[0][1]-p.at(-1)[1])<.01){toast('起点和终点不能重合',true);return false;}
  if(kind==='stop'||kind==='cross'){
   if(mode==='rectangle'){const [a,b]=p;if(Math.abs(a[0]-b[0])<.05||Math.abs(a[1]-b[1])<.05){toast('区域需要宽度和长度，请绘制两个不同的对角点',true);return false;}p=[a,[b[0],a[1]],b,[a[0],b[1]]];}mode='polygon';
@@ -39,7 +39,7 @@ function create(kind,mode,p){
 }
 function changeType(){const area=['stop','cross'].includes($('kind').value);$('mode-wrap').hidden=area;$('draw').textContent=area?'画矩形区域':'在画布绘制';if(draft)cancelDraw();}
 function startDraw(){
- const kind=$('kind').value;if(kind==='guide'&&project.entities.some(e=>e.kind==='guide')){toast('已有 Guide，请选中编辑或先删除。',true);return;}
+ const kind=$('kind').value;if(['guide','gt'].includes(kind)&&project.entities.some(e=>e.kind===kind)){toast(`已有 ${names[kind]}，请选中编辑或先删除。`,true);return;}
  draft={kind,mode:['stop','cross'].includes(kind)?'rectangle':$('mode').value,points:[],hover:null};selected=null;$('finish').hidden=draft.mode!=='polyline';render();
 }
 function cancelDraw(){draft=null;$('finish').hidden=true;render();}
@@ -60,7 +60,7 @@ function grid(){
 }
 function measurementCandidates(){
  const e=current(),filter=$('measure-kind').value;
- return project.entities.filter(v=>v.id!==e?.id&&(filter==='all'?['guide','line','curb'].includes(v.kind):filter==='line'?v.kind==='line':['line','curb'].includes(v.kind)));
+ return project.entities.filter(v=>v.id!==e?.id&&(filter==='all'?['guide','gt','line','curb'].includes(v.kind):filter==='line'?v.kind==='line':['line','curb'].includes(v.kind)));
 }
 function renderMeasurementOptions(){
  const target=$('measure-target'),previous=target.value;
@@ -69,7 +69,7 @@ function renderMeasurementOptions(){
 }
 function renderMeasurement(){
  const e=current(),layer=$('measurement'),info=$('distance-info');layer.innerHTML='';renderMeasurementOptions();
- if(!e||!['guide','line','curb'].includes(e.kind)){info.textContent='选择 Guide、车道线或路沿进行测量';return;}
+ if(!e||!['guide','gt','line','curb'].includes(e.kind)){info.textContent='选择 Guide、车道线或路沿进行测量';return;}
  const points=geometry(e),probe=measurementProbe||points[Math.floor(points.length/2)],target=$('measure-target').value;
  const candidates=measurementCandidates().filter(v=>!target||v.id===target).map(v=>({id:v.id,points:geometry(v)}));
  const m=LineMeasurement.measure(points,probe,candidates);
@@ -80,6 +80,54 @@ function renderMeasurement(){
  layer.innerHTML=halo+`<path d="${path([m.anchor,m.point])}" class="dimension"/><circle cx="${-m.anchor[1]}" cy="${-m.anchor[0]}" r="${3*u}" fill="#159182"/><circle cx="${-m.point[1]}" cy="${-m.point[0]}" r="${3*u}" fill="#159182"/><text x="${x+6*u}" y="${y-7*u}" font-size="${12*u}" class="dimension-label">${escape(m.id)} · ${m.distance.toFixed(2)} m</text>`;
 }
 $('measure-kind').onchange=renderMeasurement;$('measure-target').onchange=renderMeasurement;
+function renderCenterOptions(){
+ const e=current();$('centering').hidden=e?.kind!=='gt';$('center-restore').disabled=!e?.original_handdrawn;
+ const mode=$('center-mode').value;
+ $('center-left-wrap').hidden=mode==='right';$('center-right-wrap').hidden=mode==='left';$('center-offset-wrap').hidden=mode==='both';
+ for(const id of ['center-left','center-right']){
+  const select=$(id),previous=new Set([...select.selectedOptions].map(o=>o.value));
+  const options=project.entities.filter(v=>['line','curb'].includes(v.kind)).map(v=>`<option value="${escape(v.id)}">${escape(v.id)} · ${names[v.kind]}</option>`).join('');
+  if(select.innerHTML!==options){select.innerHTML=options;for(const option of select.options)option.selected=previous.has(option.value);}
+ }
+}
+function centerInputs(){
+ const e=current(),mode=$('center-mode').value;
+ const selected=id=>[...$(id).selectedOptions].map(o=>project.entities.find(v=>v.id===o.value)).filter(v=>v&&['line','curb'].includes(v.kind));
+ const left=mode==='right'?[]:selected('center-left'),right=mode==='left'?[]:selected('center-right');
+ if(!e||e.kind!=='gt'||mode!=='right'&&!left.length||mode!=='left'&&!right.length)throw Error('请选择GT和所需边界片段');
+ if(left.some(l=>right.includes(l)))throw Error('同一片段不能同时作为左右边界');
+ if(!$('center-trusted').checked)throw Error('请先确认所选边界及偏移假设可信');
+ const values=['center-start','center-end','center-blend'].map(id=>{if(!$(id).value.trim())throw Error('请填写区间与过渡长度');return Number($(id).value);});
+ const offset=mode==='both'?null:($('center-offset').value.trim()?Number($('center-offset').value):NaN),options={mode,offset};
+ return {e,left,right,values,options,signature:JSON.stringify([e,left,right,values,options])};
+}
+$('center-preview').onclick=()=>{try{
+ const {e,left,right,values,options,signature}=centerInputs();
+ const result=SceneGeometry.localCenter(geometry(e),left.map(geometry),right.map(geometry),...values,options);
+ centerPreview={id:e.id,result,signature};
+ $('center-info').textContent=`预览：${result.mode==='both'?`宽度 ${result.widthMin.toFixed(2)}–${result.widthMax.toFixed(2)} m`:`${result.mode==='left'?'左侧向右':'右侧向左'}偏移 ${result.offset.toFixed(2)} m`}，最大调整 ${result.maxShift.toFixed(2)} m。紫色候选GT；青色几何参考。确认后点击应用。`;
+ renderCanvas();
+ }catch(error){centerPreview=null;renderCanvas();toast(error.message,true);}};
+$('center-apply').onclick=()=>{try{
+ const inputs=centerInputs();if(!centerPreview||inputs.signature!==centerPreview.signature)throw Error('内容已变化，请重新预览');
+ const e=inputs.e,next=centerPreview.result.points,previous={mode:e.mode,points:clone(e.points)};
+ if(Math.hypot(...next[0])>1e-6||length(next)<80-1e-6)throw Error('候选GT须从原点出发且至少80m，请调整区间或过渡');
+ remember();if(!e.original_handdrawn)e.original_handdrawn=clone(previous);
+ e.centering_history=e.centering_history||[];e.centering_history.push({before:previous,left:inputs.left.map(v=>v.id),right:inputs.right.map(v=>v.id),mode:inputs.options.mode,offset:inputs.options.offset,start:inputs.values[0],end:inputs.values[1],blend:inputs.values[2]});
+ e.mode='polyline';e.points=clone(next);changed();render();$('center-info').textContent='已应用；原手绘GT已保留在scene工程内，可撤销。GT现为密集折线。';
+ }catch(error){toast(error.message,true);}};
+$('center-cancel').onclick=()=>{centerPreview=null;renderCanvas();};
+$('center-restore').onclick=()=>{
+ const e=current();if(!e?.original_handdrawn)return;
+ remember();e.mode=e.original_handdrawn.mode;e.points=clone(e.original_handdrawn.points);changed();render();
+ $('center-info').textContent='已恢复首次应用前的手绘GT，可撤销恢复操作。';
+};
+for(const id of ['center-mode','center-left','center-right','center-offset','center-start','center-end','center-blend','center-trusted'])$(id).addEventListener('input',()=>{centerPreview=null;renderCenterOptions();renderCanvas();});
+$('center-mode').addEventListener('change',()=>{centerPreview=null;renderCenterOptions();renderCanvas();});
+$('center-half-width').onclick=()=>{
+ const width=Number($('center-width').value);if(!Number.isFinite(width)||width<=0||width>16){toast('车道宽须大于0且不超过16m',true);return;}
+ $('center-offset').value=String(width/2);centerPreview=null;renderCanvas();
+};
 function rotateSelected(degrees){
  const e=current();if(!e)return;
  if(!Number.isFinite(degrees)){toast('请输入有效旋转角度',true);return;}
@@ -93,7 +141,7 @@ $('rotate-minus').onclick=()=>rotateSelected(-5);$('rotate-plus').onclick=()=>ro
 $('rotate-apply').onclick=()=>{if(!$('rotate-angle').value.trim()){toast('请输入旋转角度',true);return;}rotateSelected(Number($('rotate-angle').value));$('rotate-angle').value='0';};
 function renderCanvas(){
  svg.setAttribute('viewBox',`${camera.x} ${camera.y} ${camera.w} ${camera.h}`);grid();const u=unit();let out='';
- if(project.gt_path)out+=`<path d="${path(project.gt_path)}" class="path" stroke="#16975d" opacity=".7"/>`;
+
  for(const e of project.entities){const p=geometry(e),closed=['stop','cross'].includes(e.kind),d=path(p,closed),col=e.kind==='line'&&e.color==='yellow'?'#c8a516':colors[e.kind];
   const dash=e.kind==='guide'?'7 5':e.kind==='line'&&e.line_style==='dashed'?'6 5':'';
   if(e.id===selected)out+=`<path d="${d}" fill="${closed?col+'18':'none'}" stroke="${col}" stroke-width="8" opacity=".13" vector-effect="non-scaling-stroke"/>`;
@@ -105,21 +153,23 @@ function renderCanvas(){
  $('handles').innerHTML=handles;
  let draw='';if(draft){const p=[...draft.points,...(draft.hover?[draft.hover]:[])];if(p.length>1){if(draft.mode==='rectangle'){const [a,b]=[p[0],p.at(-1)];draw=`<path d="${path([a,[b[0],a[1]],b,[a[0],b[1]]],true)}" fill="#577dec12" stroke="#6285d3" stroke-dasharray="5 4" stroke-width="1" vector-effect="non-scaling-stroke"/>`;}else draw=`<path d="${path(p)}" fill="none" stroke="${colors[draft.kind]}" stroke-dasharray="5 4" stroke-width="2" vector-effect="non-scaling-stroke"/>`;}
   draft.points.forEach(p=>draw+=`<circle cx="${-p[1]}" cy="${-p[0]}" r="${4*u}" fill="${colors[draft.kind]}"/>`);}
+ if(centerPreview&&current()?.id===centerPreview.id){draw+=`<path d="${path(centerPreview.result.reference)}" fill="none" stroke="#18a5b1" stroke-width="2" vector-effect="non-scaling-stroke"/><path d="${path(centerPreview.result.points)}" fill="none" stroke="#b744ae" stroke-dasharray="6 4" stroke-width="2.5" vector-effect="non-scaling-stroke"/>`;}
+ $('center-apply').disabled=!centerPreview||current()?.id!==centerPreview.id;
  $('drawing').innerHTML=draw;
- let samples='';if(sampled){for(const p of sampled.guide)samples+=`<circle cx="${-p[1]}" cy="${-p[0]}" r="${2.2*u}" fill="#d18400"/>`;for(const e of sampled.lines)for(const p of e.points)samples+=`<circle cx="${-p[1]}" cy="${-p[0]}" r="${1.8*u}" fill="#315fea"/>`;}$('samples').innerHTML=samples;
+ let samples='';if(sampled){for(const p of sampled.guide)samples+=`<circle cx="${-p[1]}" cy="${-p[0]}" r="${2.2*u}" fill="#d18400"/>`;for(const p of sampled.gt||[])samples+=`<circle cx="${-p[1]}" cy="${-p[0]}" r="${2.2*u}" fill="#16975d"/>`;for(const e of sampled.lines)for(const p of e.points)samples+=`<circle cx="${-p[1]}" cy="${-p[0]}" r="${1.8*u}" fill="#315fea"/>`;}$('samples').innerHTML=samples;
  renderMeasurement();svg.classList.toggle('drawing',!!draft);svg.classList.toggle('panning',!!drag&&drag.mode==='pan');
  $('canvas-tip').textContent=draft?(draft.points.length===0?'点击起点':draft.mode==='polyline'?'继续点击添加节点，Enter /「完成绘制」结束':'点击终点；创建后拖动控制点调整形状'):'选择 / 拖动控制点 · 空格拖动画布 · 滚轮缩放';
  $('zoom-label').textContent=`网格 ${camera.h>180?20:camera.h>65?10:camera.h>25?5:1} m`;
  const guide=project.entities.find(e=>e.kind==='guide'),glen=guide?length(geometry(guide)):0;
- $('guide-status').textContent=guide?`Guide ${glen.toFixed(2)} m · ${glen>=80-1e-6?'可导出 81 点':'需延长至 ≥80 m'}`:'尚未绘制 Guide';$('guide-status').className=guide?(glen>=80-1e-6?'good':'bad'):'';
+ $('guide-status').textContent=guide?`Guide ${glen.toFixed(2)} m · ${glen>=80-1e-6?'可导出 81 点':'需延长至 ≥80 m'}`:'尚未绘制 Guide';const gt=project.entities.find(e=>e.kind==='gt');$('gt-status').textContent=gt?`GT ${length(geometry(gt)).toFixed(2)} m · ${Math.hypot(...gt.points[0])>1e-6?'起点需为 (0,0)':length(geometry(gt))<80-1e-6?'需延长至 ≥80 m':'可导出 81 点'}`:'GT 可选 · 仅作标签';$('guide-status').className=guide?(glen>=80-1e-6?'good':'bad'):'';
 }
 function renderProperties(){
- const e=current();$('properties').hidden=!e;$('no-selection').hidden=!!e;if(!e)return;
- if(rotationEntity!==e.id){rotationEntity=e.id;$('rotate-pivot').value=e.kind==='guide'?'start':'center';$('rotate-angle').value='0';}
- $('prop-id').value=e.id;$('semantics').hidden=e.kind==='guide';$('line-attrs').hidden=e.kind!=='line';$('confidence').value=e.confidence??1;$('confidence-label').textContent=Number(e.confidence??1).toFixed(2);$('color').value=e.color||'unknown';$('style').value=e.line_style||'unknown';$('prop-kind').textContent=names[e.kind];$('prop-length').textContent=length(geometry(e)).toFixed(2)+' m';
+ renderCenterOptions();const e=current();$('properties').hidden=!e;$('no-selection').hidden=!!e;if(!e)return;
+ if(rotationEntity!==e.id){rotationEntity=e.id;$('rotate-pivot').value=['guide','gt'].includes(e.kind)?'start':'center';$('rotate-angle').value='0';}
+ $('prop-id').value=e.id;$('semantics').hidden=['guide','gt'].includes(e.kind);$('line-attrs').hidden=e.kind!=='line';$('confidence').value=e.confidence??1;$('confidence-label').textContent=Number(e.confidence??1).toFixed(2);$('color').value=e.color||'unknown';$('style').value=e.line_style||'unknown';$('prop-kind').textContent=names[e.kind];$('prop-length').textContent=length(geometry(e)).toFixed(2)+' m';
  $('control-help').textContent=e.mode==='bezier'?'实心点是端点，空心点控制曲线形状；两种点都可拖动或输入坐标。':'拖动节点调整形状；折线双击线段可插入节点。';
  $('nodes').innerHTML=e.points.map((p,i)=>`<div class="node"><div><span>${e.mode==='bezier'?['起点','形状控制点 1','形状控制点 2','终点'][i]:i===0?'起点':i===e.points.length-1?'终点':`节点 ${i}`}</span>${e.mode!=='bezier'&&e.points.length>(e.mode==='polygon'?3:2)?`<button data-remove-node="${i}">移除</button>`:''}</div><div class="coords"><label>x 向前<input type="number" step=".1" value="${Number(p[0].toFixed(4))}" data-coordinate="${i},0"></label><label>y 向左<input type="number" step=".1" value="${Number(p[1].toFixed(4))}" data-coordinate="${i},1"></label></div></div>`).join('');
- $('add-node').hidden=e.mode==='bezier';$('duplicate').disabled=e.kind==='guide';
+ $('add-node').hidden=e.mode==='bezier';$('duplicate').disabled=['guide','gt'].includes(e.kind);
 }
 function render(){
  $('name').value=project.name;$('nav').value=project.navigation;$('count').textContent=project.entities.length;$('empty-list').hidden=!!project.entities.length;
@@ -137,7 +187,7 @@ svg.addEventListener('pointerdown',event=>{
 svg.addEventListener('pointermove',event=>{
  const p=metric(event);$('pointer').textContent=`x ${p[0].toFixed(2)} · y ${p[1].toFixed(2)} m`;
  if(drag?.mode==='pan'){const u=unit();camera.x-=(event.clientX-drag.x)*u;camera.y-=(event.clientY-drag.y)*u;drag.x=event.clientX;drag.y=event.clientY;renderCanvas();}
- else if(drag?.mode==='node'&&current()){moveNode(current(),drag.index,metric(event,true));measurementProbe=p;sampled=null;renderCanvas();}
+ else if(drag?.mode==='node'&&current()){centerPreview=null;moveNode(current(),drag.index,metric(event,true));measurementProbe=p;sampled=null;renderCanvas();}
  else if(draft){draft.hover=metric(event,true);renderCanvas();}
  else if(current()){measurementProbe=p;renderMeasurement();}
 });
@@ -157,7 +207,21 @@ $('nodes').addEventListener('click',event=>{const b=event.target.closest('[data-
 $('add-node').onclick=()=>{const e=current();if(!e)return;let at=0,best=-1,n=e.mode==='polygon'?e.points.length:e.points.length-1;for(let i=0;i<n;i++){const a=e.points[i],b=e.points[(i+1)%e.points.length],d=Math.hypot(a[0]-b[0],a[1]-b[1]);if(d>best){best=d;at=i;}}const a=e.points[at],b=e.points[(at+1)%e.points.length];remember();e.points.splice(at+1,0,[(a[0]+b[0])/2,(a[1]+b[1])/2]);changed();render();};
 $('prop-id').onchange=()=>{const e=current(),id=$('prop-id').value.trim();if(!id||project.entities.some(v=>v!==e&&v.id===id)){toast('名称不能为空或重复',true);renderProperties();return;}remember();e.id=id;selected=id;changed();render();};
 for(const [id,key] of [['confidence','confidence'],['color','color'],['style','line_style']])$(id).onchange=()=>{const e=current(),v=id==='confidence'?Number($(id).value):$(id).value;if(id==='confidence'&&(!Number.isFinite(v)||v<0||v>1)){toast('置信度需在0–1之间',true);renderProperties();return;}remember();e[key]=v;changed();render();};
-$('duplicate').onclick=()=>{const e=current();if(!e||e.kind==='guide')return;remember();const c=clone(e);c.id=newId(c.kind);c.points=c.points.map(p=>[p[0],p[1]+.5]);project.entities.push(c);selected=c.id;changed();render();};
+$('duplicate').onclick=()=>{const e=current();if(!e||['guide','gt'].includes(e.kind))return;remember();const c=clone(e);c.id=newId(c.kind);c.points=c.points.map(p=>[p[0],p[1]+.5]);project.entities.push(c);selected=c.id;changed();render();};
+$('guide-to-gt').onclick=()=>{
+ if(project.entities.some(e=>e.kind==='gt')){toast('已有 GT，请选中编辑或先删除。',true);return;}
+ const guide=project.entities.find(e=>e.kind==='guide');if(!guide){toast('请先绘制 Guide',true);return;}
+ if(project.entities.length>=256){toast('最多支持256个元素',true);return;}
+ remember();const gt=clone(guide);gt.id=newId('gt');gt.kind='gt';moveNode(gt,0,[0,0]);project.entities.push(gt);selected=gt.id;changed();render();
+};
+function translateSelected(key,shift=false,alt=false,record=true){
+ const e=current();if(!e||draft||drag)return false;
+ const delta=SceneGeometry.arrowDelta(key,shift,alt);if(!delta)return false;
+ const points=SceneGeometry.translate(e.points,delta);
+ if(points.flat().some(v=>!Number.isFinite(v)||Math.abs(v)>10000)){toast('平移后坐标超出支持范围',true);return false;}
+ if(record)remember();e.points=points;measurementProbe=null;changed();render();return true;
+}
+let translatingKey=null;
 $('delete').onclick=deleteSelected;$('draw').onclick=startDraw;$('finish').onclick=finishDraw;$('kind').onchange=changeType;
 $('add-numeric').onclick=()=>{const p=[['sx','sy'],['ex','ey']].map(ids=>ids.map(id=>Number($(id).value)));if(p.flat().some(v=>!Number.isFinite(v))){toast('请输入有效坐标',true);return;}const kind=$('kind').value;create(kind,['stop','cross'].includes(kind)?'rectangle':$('mode').value,p);};
 $('undo').onclick=undoAction;$('redo').onclick=redoAction;$('fit').onclick=fit;$('reset-view').onclick=resetView;
@@ -167,7 +231,7 @@ function persistDraft(){try{localStorage.setItem('pathgen_scene_editor_v1',JSON.
 window.addEventListener('pagehide',persistDraft);
 function download(value,name){const url=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)+'\n'],{type:'application/json'})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function connection(online){$('connection').textContent=online?'本地服务已连接':'服务已断开 · 可下载草稿';$('connection').classList.toggle('offline',!online);}
-async function checkConnection(){try{const r=await fetch('/api/health',{cache:'no-store',signal:AbortSignal.timeout(3000)});const data=await r.json();connection(r.ok&&data.ok===true);if(r.ok&&data.ok&&data.editor_version!==3){$('connection').textContent='后台版本较旧 · 请重启服务';$('connection').classList.add('offline');}}catch(e){connection(false);}}
+async function checkConnection(){try{const r=await fetch('/api/health',{cache:'no-store',signal:AbortSignal.timeout(3000)});const data=await r.json();connection(r.ok&&data.ok===true);if(r.ok&&data.ok&&data.editor_version!==6){$('connection').textContent='后台版本较旧 · 请重启服务';$('connection').classList.add('offline');}}catch(e){connection(false);}}
 async function request(route,value){
  const revision=dirty;let response;
  try{response=await fetch(route,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});}
@@ -180,12 +244,13 @@ $('preview').onclick=async()=>{const b=$('preview');b.disabled=true;try{const {r
 $('copy-command').onclick=async()=>{try{await navigator.clipboard.writeText($('command').value);toast('推理命令已复制');}catch(e){$('command').select();toast('请按 Ctrl+C 复制命令');}};
 $('download-input').onclick=()=>{if(lastSave)download(lastSave.input,'input.json');};
 $('draft').onclick=()=>download(project,(project.name||'scene')+'.scene.json');
-function setProject(next){remember();project=next;measurementProbe=null;selected=project.entities[0]?.id??null;draft=null;$('finish').hidden=true;changed();render();fit();}
+function upgradeGT(value){if(value.gt_path&&!value.entities.some(e=>e.kind==='gt')){value=clone(value);let id='gt_1';while(value.entities.some(e=>e.id===id))id+='_1';value.entities.push({id,kind:'gt',mode:'polyline',points:value.gt_path});delete value.gt_path;}return value;}
+function setProject(next){remember();project=upgradeGT(next);measurementProbe=null;selected=project.entities[0]?.id??null;draft=null;$('finish').hidden=true;changed();render();fit();}
 $('import').onclick=()=>$('file').click();$('file').onchange=async event=>{const file=event.target.files[0];if(!file)return;try{const {result}=await request('/api/import',JSON.parse(await file.text()));setProject(result);toast('已导入，可继续拖动编辑。');}catch(e){toast('导入失败：'+e.message,true);}finally{event.target.value='';}};
 $('example').onclick=async()=>{try{const response=await fetch('/api/example');if(!response.ok)throw Error('读取示例失败');setProject(await response.json());toast('已载入现有分流示例；原始文件不会被修改。');}catch(e){toast(e.message,true);}};
 $('new').onclick=()=>{if(project.entities.length&&!confirm('新建空场景？当前内容可用撤销恢复。'))return;setProject(empty());resetView();};
-window.addEventListener('keydown',event=>{if(['INPUT','SELECT','TEXTAREA'].includes(event.target.tagName))return;if(event.code==='Space'){space=true;event.preventDefault();}if(event.key==='Escape'){cancelDraw();}else if(event.key==='Enter'&&draft)finishDraw();else if(event.key==='Delete'||event.key==='Backspace'){event.preventDefault();deleteSelected();}else if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'){event.preventDefault();event.shiftKey?redoAction():undoAction();}else if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='y'){event.preventDefault();redoAction();}});
-window.addEventListener('keyup',event=>{if(event.code==='Space')space=false;});window.addEventListener('blur',()=>{space=false;release();});
+window.addEventListener('keydown',event=>{if(['INPUT','SELECT','TEXTAREA'].includes(event.target.tagName)||event.target.isContentEditable)return;if(event.key.startsWith('Arrow')&&!event.ctrlKey&&!event.metaKey){if(translateSelected(event.key,event.shiftKey,event.altKey,!event.repeat||translatingKey!==event.key)){translatingKey=event.key;event.preventDefault();}return;}if(event.code==='Space'){space=true;event.preventDefault();}if(event.key==='Escape'){cancelDraw();}else if(event.key==='Enter'&&draft)finishDraw();else if(event.key==='Delete'||event.key==='Backspace'){event.preventDefault();deleteSelected();}else if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'){event.preventDefault();event.shiftKey?redoAction():undoAction();}else if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='y'){event.preventDefault();redoAction();}});
+window.addEventListener('keyup',event=>{if(event.key===translatingKey)translatingKey=null;if(event.code==='Space')space=false;});window.addEventListener('blur',()=>{space=false;translatingKey=null;release();});
 new ResizeObserver(()=>{const ratio=svg.clientWidth/(svg.clientHeight||1),cx=camera.x+camera.w/2;camera.w=camera.h*ratio;camera.x=cx-camera.w/2;renderCanvas();}).observe($('canvas-wrap'));
-try{const saved=localStorage.getItem('pathgen_scene_editor_v1');if(saved){const value=JSON.parse(saved);if(value.version===1&&Array.isArray(value.entities)&&value.entities.length<=256){project=value;selected=project.entities[0]?.id??null;}}}catch(e){/* A corrupt draft does not prevent starting the editor. */}
+try{const saved=localStorage.getItem('pathgen_scene_editor_v1');if(saved){const value=JSON.parse(saved);if(value.version===1&&Array.isArray(value.entities)&&value.entities.length<=256){project=upgradeGT(value);selected=project.entities[0]?.id??null;}}}catch(e){/* A corrupt draft does not prevent starting the editor. */}
 render();resetView();

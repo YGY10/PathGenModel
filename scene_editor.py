@@ -12,11 +12,11 @@ import webbrowser
 from threading import Lock
 
 _PREVIEW_LOCK = Lock()
-EDITOR_VERSION = 3
+EDITOR_VERSION = 6
 
 ROOT = Path(__file__).resolve().parent
 ASSETS = ROOT / 'tools' / 'scene_editor'
-KINDS = {'guide', 'line', 'curb', 'stop', 'cross'}
+KINDS = {'guide', 'gt', 'line', 'curb', 'stop', 'cross'}
 FIELDS = {'line': 'lane_markings', 'curb': 'road_boundaries',
           'stop': 'stop_lines', 'cross': 'crosswalks'}
 
@@ -54,14 +54,14 @@ def curve_points(entity):
     return p
 
 
-def sample_guide(p):
+def sample_guide(p, label='Guide'):
     """Same station convention as infer.py: first 80 m, no stretch/extrapolation."""
     import numpy as np
     a = np.asarray(p, dtype=float)
     a = a[np.r_[True, np.linalg.norm(np.diff(a, axis=0), axis=1) > 1e-9]]
     arc = np.r_[0., np.cumsum(np.linalg.norm(np.diff(a, axis=0), axis=1))]
     if arc[-1] < 80-1e-6:
-        raise ValueError(f'Guide 长度只有 {arc[-1]:.2f} m，需要至少 80 m。请延长终点，不会自动拉伸。')
+        raise ValueError(f'{label} 长度只有 {arc[-1]:.2f} m，需要至少 80 m。请延长终点，不会自动拉伸。')
     return np.column_stack([np.interp(np.arange(81), arc, a[:, k]) for k in range(2)]).tolist()
 
 
@@ -82,6 +82,9 @@ def export_project(project):
         raise ValueError('最多支持 256 个元素')
     if sum(e.get('kind') == 'guide' for e in entities if isinstance(e, dict)) != 1:
         raise ValueError('场景需要且只能有一条 Guide')
+    gt_count = sum(e.get('kind') == 'gt' for e in entities if isinstance(e, dict))
+    if gt_count > 1 or gt_count and project.get('gt_path') is not None:
+        raise ValueError('场景最多只能有一条 GT，不能同时提供旧 gt_path 和 GT 元素')
     name = project.get('name', 'custom_scene')
     if not isinstance(name, str) or not name.strip() or len(name) > 128:
         raise ValueError('场景名称不能为空，且不超过 128 个字符')
@@ -98,6 +101,11 @@ def export_project(project):
         p = curve_points(e)
         if e['kind'] == 'guide':
             row['reference_line'] = sample_guide(p)
+            continue
+        if e['kind'] == 'gt':
+            if math.hypot(*p[0]) > 1e-6:
+                raise ValueError('GT 起点必须为自车原点 (0,0)，请调整起点')
+            row['gt_path'] = sample_guide(p, 'GT')
             continue
         confidence = e.get('confidence', 1.)
         if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not math.isfinite(confidence) or not 0 <= confidence <= 1:
@@ -116,6 +124,7 @@ def export_project(project):
     row = prepare(row)
     encoded = encode(row, 32, 32)
     summary = {'guide_points': 81, 'bev_shape': list(encoded['bev_points'].shape),
+               'gt_points': 81 if 'gt_path' in row else 0,
                'supplied': sum(len(row[k]) for k in FIELDS.values()),
                'retained': int(encoded['polyline_mask'].sum())}
     return row, encoded, summary
@@ -125,6 +134,16 @@ def import_project(raw):
     if not isinstance(raw, dict):
         raise ValueError('JSON 顶层必须是对象')
     if raw.get('version') == 1 and isinstance(raw.get('entities'), list):
+        # Upgrade old read-only GT into an editable entity, without changing the source.
+        if raw.get('gt_path') is not None:
+            import copy
+            raw = copy.deepcopy(raw)
+            if any(e.get('kind') == 'gt' for e in raw['entities']):
+                raise ValueError('旧 gt_path 与 GT 元素重复')
+            eid = 'gt_1'
+            while any(e.get('id') == eid for e in raw['entities']): eid += '_1'
+            raw['entities'].append({'id': eid, 'kind': 'gt', 'mode': 'polyline',
+                                    'points': points(raw.pop('gt_path'))})
         # Allow incomplete drafts (e.g. a Guide still shorter than 80 m).
         if len(raw['entities']) > 256: raise ValueError('最多支持256个元素')
         ids = set()
@@ -134,6 +153,8 @@ def import_project(raw):
             ids.add(e['id']);curve_points(e)
         if raw.get('navigation') not in ('left', 'straight', 'right'):
             raise ValueError('无效导航')
+        if sum(e['kind'] == 'gt' for e in raw['entities']) > 1:
+            raise ValueError('场景最多只能有一条 GT')
         return raw
     project = {'version': 1, 'name': str(raw.get('id', 'imported_scene')),
                'navigation': raw.get('navigation', raw.get('nav', 'straight')), 'entities': []}
@@ -159,7 +180,7 @@ def render_scene_png(project, row=None):
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib import font_manager
     from matplotlib.patches import Polygon
-    colors = {'guide':'#e69a17','line':'#407fe8','curb':'#475569','stop':'#d75f61','cross':'#2baca9'}
+    colors = {'guide':'#e69a17','gt':'#16975d','line':'#407fe8','curb':'#475569','stop':'#d75f61','cross':'#2baca9'}
     with _PREVIEW_LOCK:
         font = font_manager.FontProperties(family=['Noto Sans CJK JP','DejaVu Sans'])
         fig = Figure(figsize=(10,8), dpi=150, facecolor='white')
@@ -181,6 +202,9 @@ def render_scene_png(project, row=None):
         if row is not None:
             p=np.asarray(row['reference_line'])
             ax.plot(-p[:,1],p[:,0],color=colors['guide'],ls='--',lw=2.1,label='Guide: first 80 m')
+            if row.get('gt_path') is not None:
+                p=np.asarray(row['gt_path'])
+                ax.plot(-p[:,1],p[:,0],color=colors['gt'],lw=2.1,label='GT: first 80 m (label only)')
         if project.get('gt_path'):
             p=np.asarray(project['gt_path']);ax.plot(-p[:,1],p[:,0],color='#16975d',lw=1.5,label='Reference target')
         ax.scatter([0],[0],marker='^',s=50,color='#253951',label='Ego (0, 0)',zorder=6)
@@ -304,7 +328,7 @@ class Handler(BaseHTTPRequestHandler):
                         mask = encoded['point_mask'][i]
                         lines.append({'kind': int(encoded['polyline_attr'][i, :4].argmax()),
                                       'points': encoded['bev_points'][i, mask, :2].tolist()})
-                return self.send(200, {'guide': row['reference_line'], 'lines': lines, 'summary': summary})
+                return self.send(200, {'guide': row['reference_line'], 'gt': row.get('gt_path'), 'lines': lines, 'summary': summary})
             return self.send(404, {'error': 'Not found'})
         except (ValueError, KeyError, TypeError, OverflowError) as e:
             self.send(400, {'error': str(e)})
